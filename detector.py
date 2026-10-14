@@ -9,6 +9,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "failure_success_window_minutes": 10,
     "lab_opening_hour": 8, "lab_opening_minute": 0,
     "lab_closing_hour": 18, "lab_closing_minute": 0,
+    # Lab holidays: {"YYYY-MM-DD": "optional label"}. Any successful login on these days is flagged.
+    "holidays": {},
     "consecutive_medium_threshold": 5,
     "consecutive_high_threshold": 8,
     "consecutive_critical_threshold": 10,
@@ -35,6 +37,20 @@ def get_settings(settings=None):
     cfg["rolling_windows"] = [dict(x) for x in cfg.get("rolling_windows", [])]
     return cfg
 
+def _normalize_holidays(raw) -> dict[str, str]:
+    """Accept None, a list/set of dates, or a {date: label} mapping; return {ISO date: label}."""
+    if not raw:
+        return {}
+    items = raw.items() if isinstance(raw, dict) else [(x, "") for x in raw]
+    out: dict[str, str] = {}
+    for day, label in items:
+        try:
+            iso = pd.Timestamp(day).date().isoformat()
+        except (ValueError, TypeError):
+            raise ValueError(f"Invalid holiday date: {day!r}")
+        out[iso] = str(label or "").strip()
+    return dict(sorted(out.items()))
+
 def validate_settings(settings=None):
     cfg = get_settings(settings)
     positive = [
@@ -57,6 +73,7 @@ def validate_settings(settings=None):
         if not 0 <= h <= 23 or not 0 <= m <= 59:
             raise ValueError(f"Invalid {prefix} time.")
         cfg[f"{prefix}_hour"], cfg[f"{prefix}_minute"] = h, m
+    cfg["holidays"] = _normalize_holidays(cfg.get("holidays"))
     labels = set()
     for item in cfg["rolling_windows"]:
         item["minutes"], item["threshold"] = int(item["minutes"]), int(item["threshold"])
@@ -156,9 +173,19 @@ def analyze_events(df: pd.DataFrame, settings: dict[str, Any] | None = None) -> 
                         "failure_then_success", row.get("department_case")))
                 streak = []
 
-    # R2: after-hours successful login; opening inclusive, closing exclusive.
+    # R2: successful login on a lab holiday, or outside lab hours; opening inclusive, closing exclusive.
     opening, closing = _clock(cfg, "lab_opening"), _clock(cfg, "lab_closing")
+    holidays = cfg["holidays"]
     for _, row in successes.iterrows():
+        day = row.timestamp.date().isoformat()
+        if day in holidays:
+            label = f" ({holidays[day]})" if holidays[day] else ""
+            alerts.append(_alert("R2", "Successful login outside lab hours", "Medium", row.account, row.computer,
+                row.timestamp, row.timestamp, [row.event_id],
+                f"Successful login on {day}{label}, which is configured as a lab holiday.",
+                "Confirm whether access on a lab holiday was authorized with the lab administrator.",
+                "lab_holiday", row.get("department_case")))
+            continue
         t = row.timestamp.time()
         in_hours = opening <= t < closing if opening < closing else (t >= opening or t < closing)
         if not in_hours:

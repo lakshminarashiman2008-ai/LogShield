@@ -4,16 +4,19 @@ import html as html_lib
 import io
 import math
 import re
-from datetime import datetime
+import json
+from datetime import date, datetime, time as dtime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
+from auth import require_admin, render_sign_out
 from detector import analyze_events
 from validator import validate_csv
-from history_store import initialize_db, content_digest, prior_account_history, save_analysis, list_analyses, get_analysis_incidents, persistent_accounts
+from history_store import initialize_db, content_digest, prior_account_history, save_analysis, list_analyses, get_analysis_incidents, persistent_accounts, delete_analysis
 
 try:
     from detector import DEFAULT_SETTINGS
@@ -24,9 +27,31 @@ try:
 except ImportError:
     validate_settings = None
 
+def make_favicon():
+    """Small gradient diamond mark drawn in code, so the tab needs no emoji or image file."""
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return None
+    size = 128
+    grad = Image.new("RGBA", (size, size))
+    px = grad.load()
+    for y in range(size):
+        for x in range(size):
+            t = (x + y) / (2 * size)
+            px[x, y] = (int(32 + 51 * t), int(229 + 8 * t), int(237 - 43 * t), 255)
+    mask = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, size - 1, size - 1), radius=30, fill=255)
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    img.paste(grad, (0, 0), mask)
+    d, c = ImageDraw.Draw(img), size // 2
+    d.polygon([(c, 24), (size - 24, c), (c, size - 24), (24, c)], fill=(3, 19, 22, 255))
+    d.polygon([(c, 46), (size - 46, c), (c, size - 46), (46, c)], fill=(32, 229, 237, 255))
+    return img
+
 st.set_page_config(
-    page_title="LogShield | Security Overview",
-    page_icon="🛡️",
+    page_title="LogShield — Auth Watchtower",
+    page_icon=make_favicon(),
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -114,6 +139,19 @@ st.markdown(
     [data-testid="stSidebar"] div.stButton > button p { color:inherit; text-align:left; width:100%; }
     [data-testid="stSidebar"] div.stButton > button:hover { background:#082a30; color:#e7fbfc; border-color:#12454b; transform:translateX(5px); box-shadow:none; }
     [data-testid="stSidebar"] div.stButton > button[kind="primary"], [data-testid="stSidebar"] div.stButton > button[data-testid="stBaseButton-primary"] { background:linear-gradient(90deg,rgba(32,229,237,.18),rgba(32,229,237,.03)); color:#eaffff; border-color:#14525a; box-shadow:inset 3px 0 0 #20e5ed; }
+    /* Uniform sidebar buttons: same height, left-aligned, icons in one fixed-width column */
+    [data-testid="stSidebar"] div.stButton { margin-bottom:.2rem; }
+    [data-testid="stSidebar"] div.stButton > button { min-height:3rem; padding:0 1rem; display:flex; align-items:center; justify-content:flex-start; gap:.75rem; }
+    [data-testid="stSidebar"] div.stButton > button > div { display:flex; align-items:center; justify-content:flex-start; gap:.75rem; width:100%; }
+    [data-testid="stSidebar"] div.stButton > button [data-testid="stMarkdownContainer"] { flex:1; text-align:left; }
+    [data-testid="stSidebar"] div.stButton > button p { margin:0; font-size:.95rem; line-height:1.2; }
+    [data-testid="stSidebar"] div.stButton > button [data-testid="stIconMaterial"] { font-size:1.5rem !important; width:1.5rem; height:1.5rem; flex:0 0 1.5rem; color:#20e5ed; }
+    [data-testid="stSidebar"] div.stButton > button:hover [data-testid="stIconMaterial"] { color:#53edc2; }
+    /* Account block */
+    .sb-user { display:flex; align-items:center; gap:10px; margin:0 2px 10px 2px; color:#cdeff5; font-size:.9rem; font-weight:600; }
+    .sb-avatar { width:30px; height:30px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#20e5ed,#53edc2); color:#031316 !important; font-weight:700; font-size:.85rem; }
+    /* Invisible helper iframe used to write/clear the login cookie */
+    [data-testid="stElementContainer"]:has(iframe[height="0"]) { position:absolute; height:0; overflow:hidden; margin:0; padding:0; }
     .st-key-nav_Dashboard button { animation-delay:.05s !important; } .st-key-nav_Incident_History button { animation-delay:.12s !important; }
     .st-key-nav_Repeat_Accounts button { animation-delay:.19s !important; } .st-key-nav_Settings button { animation-delay:.26s !important; }
     .sb-card { background:#061f24; border:1px solid #11464d; border-radius:14px; padding:14px; margin-top:26px; animation:fadeUp .6s .3s ease backwards; }
@@ -130,6 +168,9 @@ st.markdown(
     .sgt { font-family:'Space Grotesk',sans-serif; font-size:1.1rem; font-weight:600; color:#e7fbfc; }
     .sgd { color:#8db4b9; font-size:.86rem; margin-top:2px; }
     [data-testid="stNumberInput"] label p, [data-testid="stTextInput"] label p, [data-testid="stToggle"] label p { color:#bfe6ea !important; font-size:.84rem; }
+
+    h1 { background:linear-gradient(90deg,#e7fbfc 0%,#8ff5f0 55%,#53edc2 100%); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; width:fit-content; }
+    .sset { font-family:'JetBrains Mono',monospace; font-size:.66rem; letter-spacing:.14em; color:#8db4b9; text-transform:uppercase; margin:14px 0 6px 0; }
 
     /* Metric cards */
     .mgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; margin:10px 0 14px 0; }
@@ -195,6 +236,10 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# ----------------------------- Admin login gate ------------------------------
+# Nothing below this line runs until an administrator has signed in.
+admin_user = require_admin()
+
 # ----------------------------- Session state --------------------------------
 if "page" not in st.session_state:
     st.session_state.page = "Dashboard"
@@ -212,10 +257,31 @@ if "settings" not in st.session_state:
 # Persistent history lives in SQLite beside this app; raw uploaded CSV rows are never stored.
 initialize_db()
 
+# ----------------------------- Lab holidays ----------------------------------
+# Stored in a small JSON file beside the app so holidays survive restarts.
+HOLIDAY_FILE = Path(__file__).resolve().with_name("lab_holidays.json")
+
+def load_holidays() -> dict[str, str]:
+    try:
+        data = json.loads(HOLIDAY_FILE.read_text(encoding="utf-8"))
+        return {str(k): str(v or "") for k, v in data.items()} if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+def save_holidays(holidays: dict[str, str]) -> None:
+    HOLIDAY_FILE.write_text(json.dumps(dict(sorted(holidays.items())), indent=2, ensure_ascii=False), encoding="utf-8")
+
+def holiday_text(iso: str, label: str = "") -> str:
+    try:
+        nice = datetime.fromisoformat(iso).strftime("%a %d %b %Y")
+    except ValueError:
+        nice = iso
+    return f"{nice} · {label}" if label else nice
+
 # ----------------------------- Helpers ---------------------------------------
 def nav_button(label: str, icon: str) -> None:
     active = st.session_state.page == label
-    if st.sidebar.button(f"{icon}  {label}", key=f"nav_{label}", use_container_width=True, type="primary" if active else "secondary"):
+    if st.sidebar.button(label, icon=icon, key=f"nav_{label}", use_container_width=True, type="primary" if active else "secondary"):
         st.session_state.page = label
         st.rerun()
 
@@ -397,7 +463,7 @@ def run_analysis(uploaded_file) -> None:
         st.warning(str(warning))
     try:
         try:
-            alerts = analyze_events(events, st.session_state.settings)
+            alerts = analyze_events(events, {**st.session_state.settings, "holidays": load_holidays()})
         except TypeError:
             alerts = analyze_events(events)
         if not isinstance(alerts, pd.DataFrame):
@@ -441,6 +507,18 @@ def run_analysis(uploaded_file) -> None:
         st.warning("This exact CSV was already analyzed. SQLite history was not duplicated; the results are shown again for review.")
     else:
         st.success(f"Analysis complete: {len(events):,} events checked, {len(alerts):,} current and historical review signal(s) raised.")
+
+def forget_session_results(analysis_id: int | None = None) -> None:
+    """Drop in-memory results for one deleted analysis (or all of them) so they don't linger on screen."""
+    if analysis_id is None or st.session_state.get("current_analysis_id") == analysis_id:
+        st.session_state.current_events = pd.DataFrame()
+        st.session_state.current_alerts = pd.DataFrame()
+        st.session_state.current_filename = ""
+        st.session_state.current_analysis_id = None
+    if analysis_id is None:
+        st.session_state.analyses = []
+    else:
+        st.session_state.analyses = [a for a in st.session_state.analyses if a.get("analysis_id") != analysis_id]
 
 def _sev_class(value: str) -> str:
     v = str(value).lower()
@@ -628,10 +706,10 @@ def repeat_accounts_html(items: list[dict[str, Any]]) -> str:
 # ----------------------------- Sidebar ---------------------------------------
 with st.sidebar:
     st.markdown('<div class="sb-brand"><div class="sb-logo">◈</div><div><div class="sb-name">Log<span>Shield</span></div><div class="sb-sub">Authentication monitoring</div></div></div><div class="sb-label">Navigate</div>', unsafe_allow_html=True)
-    nav_button("Dashboard", "▦")
-    nav_button("Incident History", "◷")
-    nav_button("Repeat Accounts", "◎")
-    nav_button("Settings", "⚙")
+    nav_button("Dashboard", ":material/dashboard:")
+    nav_button("Incident History", ":material/history:")
+    nav_button("Repeat Accounts", ":material/group:")
+    nav_button("Settings", ":material/settings:")
     try:
         _logs_n = len(list_analyses(limit=1000))
         _repeat_n = len(persistent_accounts())
@@ -642,6 +720,7 @@ with st.sidebar:
         f'<div class="sb-stats"><div><b>{_logs_n}</b><span>Logs</span></div><div><b>{_repeat_n}</b><span>Repeat accts</span></div></div></div>'
         '<div class="sb-note">Suspicious patterns are signals for review, not proof of intrusion.</div>'
         '<span class="pill">● Human review only</span>', unsafe_allow_html=True)
+    render_sign_out(admin_user)
 
 page = st.session_state.page
 
@@ -733,6 +812,8 @@ elif page == "Analyze Logs":
 elif page == "Incident History":
     st.title("Incident History")
     st.caption("Persistent SQLite history across app restarts. Only analysis metadata and incident records are stored; raw uploaded CSVs are not saved.")
+    if st.session_state.get("hist_msg"):
+        st.success(st.session_state.pop("hist_msg"))
     history_rows = list_analyses(limit=100)
     if not history_rows:
         st.info("No saved analyses yet. Upload and evaluate a CSV from the Dashboard.")
@@ -745,6 +826,20 @@ elif page == "Incident History":
         options = {f"#{item['id']} · {item['analyzed_at']} — {item['filename']}": item["id"] for item in history_rows}
         selected = st.selectbox("View a saved analysis", list(options.keys()))
         show_incident_table(get_analysis_incidents(options[selected]), "history")
+
+        # ---- Delete history (admin only; the whole app is behind the login gate)
+        hv = st.session_state.get("hist_ver", 0)
+        sel_id = options[selected]
+        with st.container(border=True):
+            st.subheader("Delete history")
+            st.caption(f"Removes the analysis selected above ({selected}) and its incidents. This can't be undone.")
+            ok_one = st.checkbox("I understand this can't be undone", key=f"hist_ok_one_{hv}")
+            if st.button("Delete this analysis", key=f"hist_del_one_{hv}", disabled=not ok_one):
+                delete_analysis(sel_id)
+                forget_session_results(sel_id)
+                st.session_state.hist_msg = f"Deleted analysis #{sel_id}."
+                st.session_state.hist_ver = hv + 1
+                st.rerun()
 
 # ----------------------------- Repeat accounts -------------------------------
 elif page == "Repeat Accounts":
@@ -790,7 +885,7 @@ elif page == "Repeat Accounts":
 elif page == "Settings":
     st.markdown('<div class="hero"><div class="eyebrow">Detector configuration / Settings</div></div>', unsafe_allow_html=True)
     st.title("Detection Settings")
-    st.caption("Tune how strictly each rule fires · changes apply to future analyses in this session")
+    st.caption("The essentials are up front · fine-tuning is tucked away under Advanced")
     current = st.session_state.settings
     if st.session_state.pop("settings_saved", False):
         st.success("Settings saved for this session. Run a new analysis to apply them.")
@@ -800,107 +895,104 @@ elif page == "Settings":
         st.caption("Expose the detector's supported settings before adding controls here; avoid inventing setting keys.")
     else:
         ver = st.session_state.get("settings_ver", 0)
-        SETTING_LABELS = {
-            "failure_success_threshold": ("Failures before success", "Minimum failed logins before a following success is flagged."),
-            "failure_success_window_minutes": ("Window (minutes)", "How close the failures and the success must be."),
-            "lab_opening_hour": ("Opens · hour", "0–23"), "lab_opening_minute": ("Opens · minute", "0–59"),
-            "lab_closing_hour": ("Closes · hour", "0–23"), "lab_closing_minute": ("Closes · minute", "0–59"),
-            "consecutive_medium_threshold": ("Medium at", "Consecutive failures that raise a Medium signal."),
-            "consecutive_high_threshold": ("High at", "Must be higher than the Medium value."),
-            "consecutive_critical_threshold": ("Critical review at", "Must be higher than the High value."),
-            "cross_account_window_minutes": ("Window (minutes)", "Time window for the burst."),
-            "cross_account_min_accounts": ("Min. accounts", "Distinct accounts failing (at least 2)."),
-            "cross_account_min_failures": ("Min. failures", "Total failures inside the window."),
-            "cross_machine_window_minutes": ("Window (minutes)", "Time window for the burst."),
-            "cross_machine_min_computers": ("Min. computers", "Distinct computers involved (at least 2)."),
-            "cross_machine_min_failures": ("Min. failures", "Total failures inside the window."),
-            "deduplicate_overlapping_alerts": ("Merge overlapping alerts", "Combine alerts that share the same event evidence into one incident."),
-        }
-        SETTING_GROUPS = [
-            ("Success after repeated failures", "shield", "Flags a successful login that follows several failures on the same account and computer.", ["failure_success_threshold", "failure_success_window_minutes"]),
-            ("Lab hours", "clock", "Successful logins outside this window are flagged. Opening is inclusive, closing is exclusive.", ["lab_opening_hour", "lab_opening_minute", "lab_closing_hour", "lab_closing_minute"]),
-            ("Consecutive failed logins", "layers", "Severity steps for a failure streak with no success in between.", ["consecutive_medium_threshold", "consecutive_high_threshold", "consecutive_critical_threshold"]),
-            ("Failures across multiple accounts", "users", "Many accounts failing on one computer within a short window.", ["cross_account_window_minutes", "cross_account_min_accounts", "cross_account_min_failures"]),
-            ("One account across multiple computers", "net", "One account failing on several computers within a short window.", ["cross_machine_window_minutes", "cross_machine_min_computers", "cross_machine_min_failures"]),
-        ]
 
-        # Summary cards (read from the saved settings)
-        def _i(key, default=0):
+        def _int(key, default=0):
             try:
                 return int(current.get(key, default))
             except (TypeError, ValueError):
                 return default
-        oh, om, ch, cm = _i("lab_opening_hour", 8), _i("lab_opening_minute"), _i("lab_closing_hour", 18), _i("lab_closing_minute")
-        open_hours = max(((ch * 60 + cm) - (oh * 60 + om)) / 60, 0)
-        med_t, high_t, crit_t = _i("consecutive_medium_threshold", 5), _i("consecutive_high_threshold", 8), _i("consecutive_critical_threshold", 10)
-        windows = current.get("rolling_windows") if isinstance(current.get("rolling_windows"), list) else []
-        st.markdown('<div class="mgrid">' + "".join([
-            _card("Lab hours", "clock", "#13323a", "#8fdcff", f"{oh:02d}:{om:02d}", f"closes {ch:02d}:{cm:02d}", "#0f3a44", "#8fdcff",
-                  f"{open_hours:g} open hours per day · logins outside are flagged", _bar([(open_hours, "#8fdcff"), (max(24 - open_hours, 0), "transparent")])),
-            _card("Streak severity", "layers", "#3a1d1d", "#ff8f8f", f"{med_t}/{high_t}/{crit_t}", "Med/High/Crit", "#3a1d1d", "#ff8f8f",
-                  "Consecutive failures needed for each severity level",
-                  _bar([(med_t, "#ffc857"), (max(high_t - med_t, 0), "#b0245a"), (max(crit_t - high_t, 0), "#ff9a8b")])),
-            _card("Rolling windows", "sliders", "#13323a", "#8ff0b0", f"{len(windows)}", "active", "#0c2e2a", "#53edc2",
-                  " · ".join(str(w.get("label", "")) for w in windows) or "No rolling windows configured",
-                  _bar([(1, "#8ff0b0")] * max(len(windows), 1))),
-        ]) + "</div>", unsafe_allow_html=True)
 
-        def setting_input(container, key):
-            value = current[key]
-            label, helptext = SETTING_LABELS.get(key, (key.replace("_", " ").title(), None))
-            wkey = f"set_{ver}_{key}"
-            if isinstance(value, bool):
-                return container.toggle(label, value=value, key=wkey, help=helptext)
-            if isinstance(value, int):
-                top = 23 if key.endswith("_hour") else 59 if key.endswith("_minute") else None
-                return container.number_input(label, value=value, step=1, min_value=0, max_value=top, key=wkey, help=helptext)
-            if isinstance(value, float):
-                return container.number_input(label, value=value, key=wkey, help=helptext)
-            if isinstance(value, str):
-                return container.text_input(label, value=value, key=wkey, help=helptext)
-            container.caption(f"{label}: {value} (not editable here)")
-            return value
+        def num(container, key, label, help=None, minimum=1):
+            return container.number_input(label, value=_int(key), min_value=minimum, step=1, key=f"set_{ver}_{key}", help=help)
 
-        def group_header(title, icon, desc):
-            st.markdown(f'<div class="sgh"><span class="micon" style="background:#13323a;color:#8fdcff">{ICONS[icon]}</span><div><div class="sgt">{title}</div><div class="sgd">{desc}</div></div></div>', unsafe_allow_html=True)
+        # ---- Lab holidays (saved immediately, independent of the Save button below)
+        holidays_now = load_holidays()
+        hver = st.session_state.get("hol_ver", 0)
+        with st.container(border=True):
+            st.subheader("Lab holidays")
+            st.caption("Days the lab is closed. Any successful login on these days is flagged for review, even during normal hours.")
+            h1, h2, h3 = st.columns([2, 2, 1])
+            picked = h1.date_input("Day or range", value=(date.today(), date.today()), key=f"hol_pick_{hver}", help="Pick one day, or click two dates for a range.")
+            hol_label = h2.text_input("Label (optional)", placeholder="e.g. Diwali", key=f"hol_label_{hver}")
+            h3.markdown("<div style='height:1.85rem'></div>", unsafe_allow_html=True)
+            if h3.button("Add", key=f"hol_add_{hver}", use_container_width=True):
+                days = [picked] if isinstance(picked, date) else list(picked)
+                if not days:
+                    st.warning("Pick a day first.")
+                else:
+                    start_d, end_d = days[0], days[-1]
+                    if (end_d - start_d).days > 366:
+                        st.error("Pick a range of up to one year.")
+                    else:
+                        for offset in range((end_d - start_d).days + 1):
+                            holidays_now[(start_d + timedelta(days=offset)).isoformat()] = hol_label.strip()
+                        save_holidays(holidays_now)
+                        st.session_state.hol_ver = hver + 1
+                        st.rerun()
+            if holidays_now:
+                st.markdown("".join(f'<span class="uchip">{html_lib.escape(holiday_text(k, v))}</span>' for k, v in sorted(holidays_now.items())), unsafe_allow_html=True)
+                r1, r2 = st.columns([4, 1])
+                to_remove = r1.multiselect("Remove holidays", options=sorted(holidays_now), format_func=lambda k: holiday_text(k, holidays_now.get(k, "")),
+                                           key=f"hol_remove_{hver}", placeholder="Choose days to remove")
+                r2.markdown("<div style='height:1.85rem'></div>", unsafe_allow_html=True)
+                if r2.button("Remove", key=f"hol_rm_{hver}", use_container_width=True) and to_remove:
+                    save_holidays({k: v for k, v in holidays_now.items() if k not in to_remove})
+                    st.session_state.hol_ver = hver + 1
+                    st.rerun()
+            else:
+                st.caption("No holidays set yet.")
 
         with st.form("settings_form"):
-            updated = {}
-            grouped = {k for g in SETTING_GROUPS for k in g[3]}
-            for title, icon, desc, keys in SETTING_GROUPS:
-                keys = [k for k in keys if k in current]
-                if not keys:
-                    continue
-                with st.container(border=True):
-                    group_header(title, icon, desc)
-                    cols = st.columns(len(keys))
-                    for col, key in zip(cols, keys):
-                        updated[key] = setting_input(col, key)
+            updated: dict[str, Any] = {}
 
-            edited_windows = None
-            if windows or isinstance(current.get("rolling_windows"), list):
-                with st.container(border=True):
-                    group_header("Rolling failure windows", "sliders", "Raise a signal when one account and computer exceed a failure count inside a time window. Add or remove rows as needed.")
-                    frame = pd.DataFrame(windows, columns=["label", "minutes", "threshold"]) if windows else pd.DataFrame(columns=["label", "minutes", "threshold"])
-                    edited_windows = st.data_editor(
-                        frame, num_rows="dynamic", use_container_width=True, hide_index=True, key=f"set_{ver}_rolling",
-                        column_config={
-                            "label": st.column_config.TextColumn("Label"),
-                            "minutes": st.column_config.NumberColumn("Window (minutes)", min_value=1, step=1),
-                            "threshold": st.column_config.NumberColumn("Failure threshold", min_value=1, step=1),
-                        })
+            with st.container(border=True):
+                st.subheader("Core rules")
+                c1, c2 = st.columns(2)
+                if "failure_success_threshold" in current:
+                    updated["failure_success_threshold"] = num(c1, "failure_success_threshold", "Failures before a success is flagged", "A success after this many failures on the same account and computer is raised for review.")
+                if "failure_success_window_minutes" in current:
+                    updated["failure_success_window_minutes"] = num(c2, "failure_success_window_minutes", "…within (minutes)")
+                if "lab_opening_hour" in current and "lab_closing_hour" in current:
+                    c3, c4 = st.columns(2)
+                    opens = c3.time_input("Lab opens", value=dtime(_int("lab_opening_hour", 8), _int("lab_opening_minute")), key=f"set_{ver}_opens", help="Successful logins outside lab hours are flagged.")
+                    closes = c4.time_input("Lab closes", value=dtime(_int("lab_closing_hour", 18), _int("lab_closing_minute")), key=f"set_{ver}_closes")
+                    updated.update({"lab_opening_hour": opens.hour, "lab_opening_minute": opens.minute,
+                                    "lab_closing_hour": closes.hour, "lab_closing_minute": closes.minute})
+                if "deduplicate_overlapping_alerts" in current:
+                    updated["deduplicate_overlapping_alerts"] = st.toggle(
+                        "Merge overlapping alerts into one incident", value=bool(current["deduplicate_overlapping_alerts"]),
+                        key=f"set_{ver}_dedupe", help="Alerts that share the same event evidence are combined.")
 
-            other = [k for k in current if k not in grouped and k != "rolling_windows"]
-            if other:
-                with st.container(border=True):
-                    group_header("Alert handling" if "deduplicate_overlapping_alerts" in other else "Other settings", "sliders", "General behaviour of the detector.")
-                    cols = st.columns(min(len(other), 3))
-                    for i, key in enumerate(other):
-                        updated[key] = setting_input(cols[i % len(cols)], key)
+            with st.expander("Advanced thresholds"):
+                if "consecutive_medium_threshold" in current:
+                    st.markdown('<div class="sset">Consecutive failed logins · severity steps</div>', unsafe_allow_html=True)
+                    a1, a2, a3 = st.columns(3)
+                    updated["consecutive_medium_threshold"] = num(a1, "consecutive_medium_threshold", "Medium at")
+                    updated["consecutive_high_threshold"] = num(a2, "consecutive_high_threshold", "High at")
+                    updated["consecutive_critical_threshold"] = num(a3, "consecutive_critical_threshold", "Critical at")
+                if "cross_account_window_minutes" in current:
+                    st.markdown('<div class="sset">Many accounts failing on one computer</div>', unsafe_allow_html=True)
+                    b1, b2, b3 = st.columns(3)
+                    updated["cross_account_window_minutes"] = num(b1, "cross_account_window_minutes", "Window (min)")
+                    updated["cross_account_min_accounts"] = num(b2, "cross_account_min_accounts", "Accounts", minimum=2)
+                    updated["cross_account_min_failures"] = num(b3, "cross_account_min_failures", "Failures")
+                if "cross_machine_window_minutes" in current:
+                    st.markdown('<div class="sset">One account failing on many computers</div>', unsafe_allow_html=True)
+                    d1, d2, d3 = st.columns(3)
+                    updated["cross_machine_window_minutes"] = num(d1, "cross_machine_window_minutes", "Window (min)")
+                    updated["cross_machine_min_computers"] = num(d2, "cross_machine_min_computers", "Computers", minimum=2)
+                    updated["cross_machine_min_failures"] = num(d3, "cross_machine_min_failures", "Failures")
+                windows = current.get("rolling_windows") if isinstance(current.get("rolling_windows"), list) else []
+                new_thresholds: list[int] = []
+                if windows:
+                    st.markdown('<div class="sset">Failures over time · alert at</div>', unsafe_allow_html=True)
+                    for col, w in zip(st.columns(len(windows)), windows):
+                        new_thresholds.append(col.number_input(f"In {w.get('label', '')}", value=int(w.get("threshold", 1)), min_value=1, step=1,
+                                                               key=f"set_{ver}_roll_{w.get('minutes')}"))
 
-            b1, b2, _sp = st.columns([1, 1, 2])
-            save = b1.form_submit_button("Save settings", type="primary", use_container_width=True)
-            reset = b2.form_submit_button("Reset to defaults", use_container_width=True)
+            b_save, b_reset, _sp = st.columns([1, 1, 2])
+            save = b_save.form_submit_button("Save settings", type="primary", use_container_width=True)
+            reset = b_reset.form_submit_button("Reset to defaults", use_container_width=True)
 
         if reset:
             st.session_state.settings = dict(DEFAULT_SETTINGS)
@@ -910,14 +1002,8 @@ elif page == "Settings":
         if save:
             candidate = dict(current)
             candidate.update(updated)
-            if edited_windows is not None:
-                rows = []
-                for r in edited_windows.to_dict("records"):
-                    if pd.isna(r.get("minutes")) or pd.isna(r.get("threshold")):
-                        continue
-                    label = str(r.get("label") or "").strip() or f"{int(r['minutes'])} minutes"
-                    rows.append({"label": label, "minutes": int(r["minutes"]), "threshold": int(r["threshold"])})
-                candidate["rolling_windows"] = rows
+            if windows:
+                candidate["rolling_windows"] = [{**w, "threshold": int(t)} for w, t in zip(windows, new_thresholds)]
             try:
                 if validate_settings is not None:
                     candidate = validate_settings(candidate)
