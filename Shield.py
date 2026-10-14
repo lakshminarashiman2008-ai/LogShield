@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import html as html_lib
+import io
+import math
+import re
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import plotly.express as px
 import streamlit as st
+import streamlit.components.v1 as components
 
 from detector import analyze_events
 from validator import validate_csv
+from history_store import initialize_db, content_digest, prior_account_history, save_analysis, list_analyses, get_analysis_incidents, persistent_accounts
 
 try:
     from detector import DEFAULT_SETTINGS
@@ -27,7 +31,7 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
     :root {
       --bg: #031316; --panel: #061e22; --panel2: #08272b;
       --border: #11515a; --cyan: #20e5ed; --mint: #53edc2;
@@ -36,6 +40,8 @@ st.markdown(
     }
     html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     .stApp { background: radial-gradient(ellipse at 75% 0%, #073238 0%, var(--bg) 48%); color: var(--text); }
+    /* Keep the page header from clipping the eyebrow / first panels */
+    .block-container { padding-top: 4rem !important; }
     [data-testid="stSidebar"] { background: #041a1e; border-right: 1px solid var(--border); }
     [data-testid="stSidebar"] * { color: var(--text); }
     h1,h2,h3 { font-family: 'Space Grotesk', sans-serif !important; letter-spacing: -0.03em; }
@@ -47,6 +53,8 @@ st.markdown(
     [data-testid="stMetricValue"] { color: var(--text) !important; font-family: 'Space Grotesk', sans-serif; }
     [data-testid="stMetricDelta"] { color: var(--mint) !important; }
     div[data-testid="stVerticalBlockBorderWrapper"] { border-color: var(--border) !important; border-radius: 15px; }
+    /* Panel headings: tighter, consistent spacing */
+    div[data-testid="stVerticalBlockBorderWrapper"] h3 { padding: 0 0 .15rem 0 !important; margin: 0 !important; }
     .hero { padding: 8px 0 16px 0; }
     .eyebrow { color: var(--cyan); text-transform: uppercase; font-size: .75rem; letter-spacing: .15em; font-weight: 700; }
     .muted { color: var(--muted); }
@@ -59,7 +67,72 @@ st.markdown(
     div.stButton > button:hover { border-color: var(--cyan); color: white; }
     div[data-baseweb="select"] > div, div[data-baseweb="input"] > div, textarea { background-color:#061e22 !important; border-color:#14525a !important; }
     [data-testid="stDataFrame"] { border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+    /* Upload box: compact and content-sized (no big empty gap under the file chip) */
+    [data-testid="stFileUploader"] { margin-bottom: .5rem; }
+    [data-testid="stFileUploaderDropzone"] { min-height: 0 !important; padding: 10px 12px !important; align-items: center; }
+    [data-testid="stFileUploaderDropzoneInstructions"] { padding: 0 !important; }
+    [data-testid="stFileUploaderDropzone"] button { padding: 4px 12px !important; min-height: 32px !important; }
+    [data-testid="stFileUploaderFile"] { padding: 2px 0 !important; }
     hr { border-color:#123e44; }
+    /* Metric cards */
+    .mgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; margin:10px 0 14px 0; }
+    .mcard { background:linear-gradient(160deg,#0c2a30,#071d21); border:1px solid #123e44; border-radius:18px; padding:20px 22px 22px 22px; }
+    .mtop { display:flex; justify-content:space-between; align-items:center; }
+    .mlabel { font-family:'JetBrains Mono',monospace; font-size:.72rem; letter-spacing:.14em; color:#a9cdd2; text-transform:uppercase; }
+    .micon { width:40px; height:40px; border-radius:11px; display:flex; align-items:center; justify-content:center; }
+    .micon svg { width:20px; height:20px; }
+    .mval { display:flex; align-items:center; gap:12px; margin-top:14px; flex-wrap:wrap; }
+    .mnum { font-family:'Space Grotesk',sans-serif; font-size:2.7rem; font-weight:600; line-height:1; color:#cdeff5; }
+    .mchip { font-family:'JetBrains Mono',monospace; font-size:.76rem; padding:4px 10px; border-radius:8px; white-space:nowrap; }
+    .mdesc { color:#a9cdd2; font-size:.95rem; line-height:1.4; margin-top:10px; min-height:2.7em; }
+    .mbar { display:flex; gap:3px; height:8px; border-radius:99px; overflow:hidden; background:#0b2a2f; margin-top:16px; }
+    .mbar span { transform-origin:left; animation:mgrow .9s cubic-bezier(.22,.8,.3,1) both; }
+    @keyframes mgrow { from { transform:scaleX(0); } to { transform:scaleX(1); } }
+    /* Upload info */
+    .utiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(90px,1fr)); gap:8px; margin:10px 0 8px 0; }
+    .utile { background:#061c20; border:1px solid #12454b; border-radius:10px; padding:8px 12px; }
+    .utile b { display:block; font-family:'Space Grotesk',sans-serif; font-size:1.25rem; color:#dffbfc; line-height:1.2; }
+    .utile span { font-family:'JetBrains Mono',monospace; font-size:.62rem; letter-spacing:.12em; color:#8db4b9; text-transform:uppercase; }
+    .usec { font-family:'JetBrains Mono',monospace; font-size:.66rem; letter-spacing:.14em; color:#8db4b9; text-transform:uppercase; margin:12px 0 6px 0; }
+    .uchip { display:inline-block; font-size:.74rem; padding:3px 10px; margin:0 6px 6px 0; border-radius:999px; border:1px solid #14525a; background:#07262b; color:#bfe6ea; }
+    .uchip.ok { border-color:#1f6f5c; background:#0a2e2a; color:#7cf0c8; }
+    .uchip.bad { border-color:#7a2a3a; background:#2a1018; color:#ff8fa8; }
+    .uok { color:#7cf0c8; font-size:.85rem; margin-top:8px; }
+    /* Repeat accounts */
+    .rgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(360px,1fr)); gap:16px; margin-top:10px; }
+    .racc { background:linear-gradient(160deg,#0c2a30,#071d21); border:1px solid #123e44; border-radius:18px; padding:18px 20px; }
+    .racc.hot { border-color:#6b2433; box-shadow:0 0 0 1px #33141c inset; }
+    .rhead { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+    .rname { font-family:'JetBrains Mono',monospace; font-size:1.05rem; font-weight:600; color:#e7fbfc; word-break:break-all; }
+    .rbadges { margin:10px 0 4px 0; display:flex; gap:8px; flex-wrap:wrap; }
+    .rbadge { font-family:'JetBrains Mono',monospace; font-size:.72rem; padding:4px 10px; border-radius:8px; background:#0f3a44; color:#8fdcff; }
+    .rbadge.red { background:#33141c; color:#ff8fa8; }
+    .rstrip { display:flex; gap:5px; flex-wrap:wrap; margin:12px 0 6px 0; }
+    .rdot { width:11px; height:11px; border-radius:50%; display:inline-block; flex:0 0 11px; background:#35c9ff; }
+    .rdot.f { background:#ff557b; box-shadow:0 0 8px rgba(255,85,123,.5); }
+    .rrow { display:flex; align-items:center; gap:10px; padding:7px 0; border-top:1px solid #0e3237; font-size:.8rem; }
+    .rwhen { font-family:'JetBrains Mono',monospace; color:#8db4b9; font-size:.72rem; white-space:nowrap; }
+    .rfile { flex:1; color:#cdeff5; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .rtag { font-size:.72rem; color:#8db4b9; white-space:nowrap; }
+    .rtag.f { color:#ff8fa8; }
+    .rmore { color:#5d8a90; font-size:.74rem; padding-top:6px; }
+    /* Incident table */
+    .ltable-wrap { max-height:470px; overflow:auto; border:1px solid #123e44; border-radius:14px; background:#051a1e; margin-top:6px; }
+    .ltable { width:100%; min-width:1150px; border-collapse:separate; border-spacing:0; font-size:.84rem; color:#dffbfc; }
+    .ltable th { position:sticky; top:0; z-index:1; background:#08272b; text-align:left; padding:12px 14px; font-family:'JetBrains Mono',monospace; font-size:.66rem; letter-spacing:.14em; color:#8db4b9; text-transform:uppercase; border-bottom:1px solid #123e44; white-space:nowrap; }
+    .ltable td { padding:12px 14px; border-bottom:1px solid #0e3237; vertical-align:top; }
+    .ltable tr:last-child td { border-bottom:none; }
+    .ltable tbody tr:hover td { background:#08262b; }
+    .ltable .idx { color:#5d8a90; font-family:'JetBrains Mono',monospace; font-size:.76rem; }
+    .ltable .rule { font-weight:600; min-width:170px; }
+    .ltable .mono { font-family:'JetBrains Mono',monospace; font-size:.78rem; color:#bfe6ea; white-space:nowrap; }
+    .ltable .clamp { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; max-width:340px; color:#9cc8cc; line-height:1.45; }
+    .sev { display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px; font-size:.74rem; font-weight:600; white-space:nowrap; }
+    .sev::before { content:''; width:6px; height:6px; border-radius:50%; background:currentColor; }
+    .sev.high { background:#33141c; color:#ff7a90; border:1px solid #6b2433; }
+    .sev.medium { background:#33290f; color:#ffc857; border:1px solid #6c5a21; }
+    .sev.low { background:#0c2e2a; color:#53edc2; border:1px solid #1f6f5c; }
+    .sev.other { background:#0f2f3a; color:#8fdcff; border:1px solid #1f5d73; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -79,6 +152,9 @@ if "current_filename" not in st.session_state:
 if "settings" not in st.session_state:
     st.session_state.settings = dict(DEFAULT_SETTINGS) if isinstance(DEFAULT_SETTINGS, dict) else {}
 
+# Persistent history lives in SQLite beside this app; raw uploaded CSV rows are never stored.
+initialize_db()
+
 # ----------------------------- Helpers ---------------------------------------
 def nav_button(label: str, icon: str) -> None:
     if st.sidebar.button(f"{icon}  {label}", key=f"nav_{label}", use_container_width=True):
@@ -96,11 +172,44 @@ def safe_count(frame: pd.DataFrame, names: list[str]) -> int:
         return 0
     return int(series.nunique()) if hasattr(series, "nunique") else 0
 
-def alert_column(frame: pd.DataFrame, names: list[str], fallback: str = "—") -> pd.Series:
-    series = first_existing(frame, names)
-    if series is None:
-        return pd.Series([fallback] * len(frame), index=frame.index)
-    return series.fillna(fallback).astype(str)
+_MISSING = {"", "—", "-", "nan", "none", "nat", "<na>"}
+
+def alert_column(frame: pd.DataFrame, names: list[str], fallback: str = "") -> pd.Series:
+    """First usable value across all alias columns, row by row; blanks and placeholders count as missing."""
+    result = pd.Series([fallback] * len(frame), index=frame.index, dtype=object)
+    filled = pd.Series(False, index=frame.index)
+    for name in names:
+        if name not in frame.columns:
+            continue
+        col = frame[name]
+        if isinstance(col, pd.DataFrame):
+            col = col.iloc[:, 0]
+        col = col.where(col.notna(), "").astype(str).str.strip()
+        usable = ~col.str.lower().isin(_MISSING) & ~filled
+        result[usable] = col[usable]
+        filled |= usable
+    return result
+
+def humanize_rule(value: Any) -> str:
+    text = str(value)
+    mapping = {
+        "R1": "Repeated failures followed by success",
+        "R2": "Login outside lab hours",
+        "R3": "Consecutive failed logins",
+        "R4": "Repeated failed logins over time",
+        "R5": "Failed logins across multiple accounts",
+        "R6": "One account across multiple computers",
+        "H1": "Previously flagged account observed again",
+        "MULTI": "Multiple-account failure pattern",
+    }
+    if text.strip().upper() in mapping:
+        return mapping[text.strip().upper()]
+    # Replace a leading rule identifier while retaining any descriptive suffix.
+    match = re.match(r"^R([1-6])\s*[-:—]?\s*(.*)$", text.strip(), flags=re.I)
+    if match:
+        description = match.group(2).strip()
+        return description if description else mapping.get("R" + match.group(1), text)
+    return text
 
 def normalized_alerts(frame: pd.DataFrame) -> pd.DataFrame:
     if frame is None or frame.empty:
@@ -122,16 +231,96 @@ def normalized_alerts(frame: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame(index=frame.index)
     for target, candidates in aliases.items():
         out[target] = alert_column(frame, candidates)
+    out["Rule"] = out["Rule"].map(humanize_rule)
     return out.reset_index(drop=True)
+
+DONUT_COLORS = ["#ff4d4f", "#ff8c42", "#ffd166", "#e85d75", "#ffb36b", "#d95f59", "#f97316", "#fb7185"]
+
+def donut_html(counts: pd.DataFrame) -> str:
+    """Self-contained animated donut (SVG + CSS). Segments draw in one after another; hover shows details."""
+    total = int(counts["Incidents"].sum())
+    radius, stroke = 70, 22
+    circ = 2 * math.pi * radius
+    gap = 3 if len(counts) > 1 else 0
+    segments, legend, cum = [], [], 0.0
+    for i, row in enumerate(counts.itertuples(index=False)):
+        name = html_lib.escape(str(row[0]))
+        value = int(row[1])
+        frac = value / total if total else 0
+        seg_len = max(frac * circ - gap, 0.5)
+        color = DONUT_COLORS[i % len(DONUT_COLORS)]
+        pct = f"{frac * 100:.1f}%"
+        segments.append(
+            f'<circle class="seg" data-i="{i}" data-name="{name}" data-val="{value}" data-pct="{pct}" '
+            f'cx="100" cy="100" r="{radius}" stroke="{color}" '
+            f'style="--len:{seg_len:.2f};--off:{-cum:.2f};animation-delay:{0.15 + i * 0.28:.2f}s"/>'
+        )
+        legend.append(
+            f'<div class="row" data-i="{i}" data-name="{name}" data-val="{value}" data-pct="{pct}" style="animation-delay:{0.25 + i * 0.28:.2f}s">'
+            f'<span class="dot" style="background:{color}"></span><span class="nm">{name}</span>'
+            f'<span class="ct">{value} · {pct}</span></div>'
+        )
+        cum += frac * circ
+    return f"""
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap');
+  html, body {{ margin:0; background:transparent; font-family:'DM Sans',sans-serif; color:#dffbfc; }}
+  .wrap {{ display:flex; flex-direction:column; align-items:center; gap:14px; padding:4px; box-sizing:border-box; }}
+  .chart {{ position:relative; width:200px; height:200px; flex:0 0 200px; }}
+  svg {{ width:100%; height:100%; transform:rotate(-90deg); overflow:visible; }}
+  .track {{ fill:none; stroke:#0b2f35; stroke-width:{stroke}; }}
+  .seg {{ fill:none; stroke-width:{stroke}; stroke-dasharray:0 {circ:.2f}; stroke-dashoffset:var(--off);
+         animation:draw .9s cubic-bezier(.22,.8,.3,1) forwards; cursor:pointer;
+         transition:stroke-width .2s ease, opacity .2s ease, filter .2s ease; }}
+  @keyframes draw {{ to {{ stroke-dasharray:var(--len) {circ:.2f}; }} }}
+  .chart.hovering .seg {{ opacity:.35; }}
+  .chart.hovering .seg.on {{ opacity:1; stroke-width:{stroke + 5}; filter:drop-shadow(0 0 6px rgba(255,255,255,.25)); }}
+  .center {{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; pointer-events:none; padding:0 46px; }}
+  .center .v {{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:2.1rem; line-height:1; animation:pop .6s .2s both; }}
+  .center .l {{ color:#8db4b9; font-size:.7rem; margin-top:6px; line-height:1.2; }}
+  @keyframes pop {{ from {{ opacity:0; transform:scale(.6); }} to {{ opacity:1; transform:scale(1); }} }}
+  .legend {{ width:100%; max-width:440px; max-height:172px; overflow-y:auto; display:flex; flex-direction:column; gap:7px; padding-right:4px; box-sizing:border-box; scrollbar-width:thin; scrollbar-color:#14525a transparent; }}
+  .row {{ display:flex; align-items:center; gap:9px; padding:7px 10px; border:1px solid #12454b; background:#061c20; border-radius:9px;
+         font-size:.76rem; opacity:0; transform:translateX(12px); flex:0 0 auto; animation:slide .5s ease forwards; transition:border-color .2s, background .2s; cursor:pointer; }}
+  .row:hover, .row.on {{ border-color:#20e5ed; background:#082a2f; }}
+  @keyframes slide {{ to {{ opacity:1; transform:none; }} }}
+  .dot {{ width:10px; height:10px; border-radius:50%; flex:0 0 10px; }}
+  .nm {{ flex:1; color:#dffbfc; }}
+  .ct {{ color:#8db4b9; white-space:nowrap; font-variant-numeric:tabular-nums; }}
+</style>
+<div class="wrap">
+  <div class="chart" id="chart">
+    <svg viewBox="0 0 200 200"><circle class="track" cx="100" cy="100" r="{radius}"/>{''.join(segments)}</svg>
+    <div class="center"><div class="v" id="cv">{total}</div><div class="l" id="cl">Total incidents</div></div>
+  </div>
+  <div class="legend">{''.join(legend)}</div>
+</div>
+<script>
+  const chart = document.getElementById('chart'), cv = document.getElementById('cv'), cl = document.getElementById('cl');
+  const segs = document.querySelectorAll('.seg'), rows = document.querySelectorAll('.row');
+  function on(i, el) {{
+    chart.classList.add('hovering');
+    segs.forEach(s => s.classList.toggle('on', s.dataset.i === i));
+    rows.forEach(r => r.classList.toggle('on', r.dataset.i === i));
+    cv.textContent = el.dataset.val; cl.textContent = el.dataset.name + ' · ' + el.dataset.pct;
+  }}
+  function off() {{
+    chart.classList.remove('hovering');
+    segs.forEach(s => s.classList.remove('on')); rows.forEach(r => r.classList.remove('on'));
+    cv.textContent = '{total}'; cl.textContent = 'Total incidents';
+  }}
+  [...segs, ...rows].forEach(el => {{ el.addEventListener('mouseenter', () => on(el.dataset.i, el)); el.addEventListener('mouseleave', off); }});
+</script>
+"""
 
 def run_analysis(uploaded_file) -> None:
     try:
-        uploaded_file.seek(0)
-        validation = validate_csv(uploaded_file)
+        raw_bytes = uploaded_file.getvalue()
+        digest = content_digest(raw_bytes)
+        validation = validate_csv(io.BytesIO(raw_bytes))
     except Exception as exc:
         st.error(f"Could not validate this CSV: {exc}")
         return
-
     errors = getattr(validation, "errors", []) or []
     warnings = getattr(validation, "warnings", []) or []
     if errors:
@@ -141,18 +330,13 @@ def run_analysis(uploaded_file) -> None:
         for warning in warnings:
             st.warning(warning)
         return
-
     events = getattr(validation, "data", None)
     if events is None:
         st.error("The validator did not return normalized event data.")
         return
-
     for warning in warnings:
         st.warning(str(warning))
-
     try:
-        # Detection thresholds are held in session state for the Settings page.
-        # Existing detector settings are passed only when the signature supports it.
         try:
             alerts = analyze_events(events, st.session_state.settings)
         except TypeError:
@@ -164,29 +348,216 @@ def run_analysis(uploaded_file) -> None:
         st.caption("If this persists, check the function signature in detector.py.")
         return
 
+    # H1: current accounts that appeared in incidents from an earlier distinct run.
+    account_values = events["account"].dropna().astype(str).str.strip().unique().tolist() if "account" in events else []
+    history = prior_account_history(account_values)
+    history_rows = []
+    for account in account_values:
+        record = history.get(account.casefold())
+        if record:
+            history_rows.append({
+                "incident_id": f"H1-{len(history_rows)+1:03d}", "rule_id": "H1",
+                "rule": "Previously flagged account observed again", "severity": "Medium",
+                "account": account, "computer": "Multiple / see source logs",
+                "start_time": "—", "end_time": "—", "event_ids": "Not inferred from historical data",
+                "evidence": f"This account appeared in incident records from {record['run_count']} earlier distinct analysis run(s). Latest prior record: {record['last_seen']}. This is context for review, not proof of current suspicious activity.",
+                "recommendation": "Review current events and verify whether the prior and current activity are expected.",
+                "signal": "historical_repeat_account",
+            })
+    if history_rows:
+        alerts = pd.concat([alerts, pd.DataFrame(history_rows)], ignore_index=True, sort=False)
+    account_counts = events["account"].astype(str).str.strip().value_counts().to_dict() if "account" in events else {}
+    saved = save_analysis(content_hash=digest, filename=uploaded_file.name, event_count=len(events), alerts=alerts, account_counts=account_counts)
     st.session_state.current_events = events.copy()
     st.session_state.current_alerts = alerts.copy()
     st.session_state.current_filename = uploaded_file.name
+    st.session_state.current_analysis_id = saved.get("analysis_id")
     st.session_state.analyses.insert(0, {
-        "filename": uploaded_file.name,
-        "analyzed_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "events": len(events),
-        "alerts": len(alerts),
-        "data": alerts.copy(),
+        "analysis_id": saved.get("analysis_id"), "filename": uploaded_file.name,
+        "analyzed_at": saved.get("analyzed_at", datetime.now().strftime("%Y-%m-%d %H:%M")),
+        "events": len(events), "alerts": len(alerts), "data": alerts.copy(),
     })
     st.session_state.analyses = st.session_state.analyses[:20]
-    st.success(f"Analysis complete: {len(events):,} events checked and {len(alerts):,} alerts raised.")
+    if saved.get("duplicate"):
+        st.warning("This exact CSV was already analyzed. SQLite history was not duplicated; the results are shown again for review.")
+    else:
+        st.success(f"Analysis complete: {len(events):,} events checked, {len(alerts):,} current and historical review signal(s) raised.")
+
+def _sev_class(value: str) -> str:
+    v = str(value).lower()
+    if v in ("high", "critical", "critical review"):
+        return "high"
+    if v == "medium":
+        return "medium"
+    if v == "low":
+        return "low"
+    return "other"
+
+def _cell(value: Any) -> str:
+    return html_lib.escape(str(value)) if str(value).strip() else ""
+
+def incident_table_html(view: pd.DataFrame) -> str:
+    rows = []
+    for n, (_, r) in enumerate(view.iterrows(), start=1):
+        start_t, end_t = str(r["Start time"]).strip(), str(r["End time"]).strip()
+        window = f"{start_t} → {end_t}" if start_t and end_t else start_t or end_t
+        sev = f'<span class="sev {_sev_class(r["Severity"])}">{_cell(r["Severity"])}</span>' if str(r["Severity"]).strip() else ""
+        evidence, rec = str(r["Evidence"]), str(r["Recommendation"])
+        rows.append(
+            f'<tr><td class="idx">{n:02d}</td><td>{sev}</td><td class="rule">{_cell(r["Rule"])}</td>'
+            f'<td class="mono">{_cell(r["Account"])}</td><td class="mono">{_cell(r["Computer"])}</td>'
+            f'<td class="mono">{_cell(window)}</td><td class="mono">{_cell(r["Event IDs"])}</td>'
+            f'<td><div class="clamp" title="{html_lib.escape(evidence)}">{_cell(evidence)}</div></td>'
+            f'<td><div class="clamp" title="{html_lib.escape(rec)}">{_cell(rec)}</div></td></tr>'
+        )
+    head = "".join(f"<th>{h}</th>" for h in ["#", "Severity", "Rule", "Account", "Computer", "Time window", "Event IDs", "Evidence", "Recommendation"])
+    return f'<div class="ltable-wrap"><table class="ltable"><thead><tr>{head}</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
 
 def show_incident_table(alerts: pd.DataFrame, key_prefix: str = "incidents") -> None:
     view = normalized_alerts(alerts)
     if view.empty:
         st.info("No incidents to display. Run an analysis or adjust the filters.")
         return
-    view.insert(0, "#", range(1, len(view) + 1))
-    st.dataframe(view, use_container_width=True, hide_index=True, height=340)
-    csv = view.to_csv(index=False).encode("utf-8")
-    st.download_button("⬇ Download incidents CSV", data=csv, file_name="logshield_incidents.csv",
-                       mime="text/csv", key=f"{key_prefix}_download")
+    sevs = sorted(view["Severity"].replace("", "Unrated").unique().tolist())
+    f1, f2 = st.columns([3, 2])
+    query = f1.text_input("Search incidents", key=f"{key_prefix}_q", placeholder="🔍  Search account, computer, rule or evidence", label_visibility="collapsed")
+    chosen = f2.multiselect("Severity filter", sevs, default=sevs, key=f"{key_prefix}_sev_{'|'.join(sevs)}", placeholder="Filter by severity", label_visibility="collapsed")
+    shown = view
+    if chosen:
+        shown = shown[shown["Severity"].replace("", "Unrated").isin(chosen)]
+    if query.strip():
+        q = query.strip().lower()
+        shown = shown[shown.apply(lambda r: q in " ".join(map(str, r.values)).lower(), axis=1)]
+    st.caption(f"Showing {len(shown):,} of {len(view):,} review signals · hover truncated text for the full note")
+    if shown.empty:
+        st.info("No incidents match these filters.")
+    else:
+        st.markdown(incident_table_html(shown), unsafe_allow_html=True)
+    st.download_button("⬇ Download incidents CSV", data=shown.to_csv(index=False).encode("utf-8"),
+                       file_name="logshield_incidents.csv", mime="text/csv", key=f"{key_prefix}_download")
+
+REQUIRED_COLS = ["event_id", "timestamp", "account", "computer", "event"]
+RULE_CHIPS = ["Failures then success", "Outside lab hours", "Consecutive failures", "Failures over time", "Multi-account failures", "One account, many computers", "Repeat offenders"]
+
+def upload_info_html(uploaded) -> str:
+    """Fills the upload panel: quick file stats, column check, and what the detector covers."""
+    out = []
+    df = None
+    if uploaded is not None:
+        try:
+            df = pd.read_csv(io.BytesIO(uploaded.getvalue()))
+        except Exception:
+            df = None
+    lowered = {str(c).strip().lower(): c for c in df.columns} if df is not None else {}
+    if df is not None:
+        tiles = [("Rows", f"{len(df):,}"), ("Columns", f"{len(df.columns)}")]
+        if "account" in lowered:
+            tiles.append(("Accounts", f"{df[lowered['account']].nunique():,}"))
+        if "computer" in lowered:
+            tiles.append(("Computers", f"{df[lowered['computer']].nunique():,}"))
+        out.append('<div class="utiles">' + "".join(f'<div class="utile"><b>{v}</b><span>{k}</span></div>' for k, v in tiles) + "</div>")
+        missing = [c for c in REQUIRED_COLS if c not in lowered]
+        if missing:
+            out.append('<div class="usec">Required columns</div>' + "".join(f'<span class="uchip bad">✕ {c}</span>' for c in missing))
+        else:
+            out.append('<div class="uok">✓ All required columns found</div>')
+    else:
+        out.append('<div class="usec">Required columns</div>' + "".join(f'<span class="uchip">{c}</span>' for c in REQUIRED_COLS))
+    out.append('<div class="usec">Checks run on every upload</div>' + "".join(f'<span class="uchip">{c}</span>' for c in RULE_CHIPS))
+    return "".join(out)
+
+ICONS = {
+    "db": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>',
+    "shield": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z"/><path d="M12 8v5M12 16.5v.01"/></svg>',
+    "users": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><path d="M16 4.6a3.5 3.5 0 010 6.8M18 14.4c2 .7 3.5 2.4 3.5 5.6"/></svg>',
+    "alert": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v9M12 19v.01"/></svg>',
+}
+
+def _bar(segments: list[tuple[float, str]]) -> str:
+    parts = "".join(f'<span style="flex:{c};background:{col}"></span>' for c, col in segments if c > 0)
+    return f'<div class="mbar">{parts}</div>'
+
+def _account_set(series: pd.Series) -> set[str]:
+    found: set[str] = set()
+    for value in series.dropna().astype(str):
+        for part in re.split(r"[,;|]", value):
+            part = part.strip()
+            if part and part != "—":
+                found.add(part)
+    return found
+
+def _card(label, icon, icon_bg, icon_fg, value, chip, chip_bg, chip_fg, desc, bar) -> str:
+    chip_html = f'<span class="mchip" style="background:{chip_bg};color:{chip_fg}">{html_lib.escape(chip)}</span>' if chip else ""
+    return (
+        f'<div class="mcard"><div class="mtop"><span class="mlabel">{label}</span>'
+        f'<span class="micon" style="background:{icon_bg};color:{icon_fg}">{ICONS[icon]}</span></div>'
+        f'<div class="mval"><span class="mnum">{value}</span>{chip_html}</div>'
+        f'<div class="mdesc">{html_lib.escape(desc)}</div>{bar}</div>'
+    )
+
+def metric_cards_html(events: pd.DataFrame, alerts: pd.DataFrame) -> str:
+    view = normalized_alerts(alerts)
+    sev = view["Severity"].astype(str).str.lower() if not view.empty else pd.Series([], dtype=str)
+    crit = int(sev.isin(["critical", "critical review"]).sum())
+    high_only = int((sev == "high").sum())
+    med = int((sev == "medium").sum())
+    low = max(len(sev) - crit - high_only - med, 0)
+    hist = int((view["Rule"] == "Previously flagged account observed again").sum()) if not view.empty else 0
+    current = len(view) - hist
+    rules = int(view["Rule"].nunique()) if not view.empty else 0
+
+    flagged = _account_set(alerts["account"]) if "account" in alerts.columns else (_account_set(alerts["accounts"]) if "accounts" in alerts.columns else set())
+    total_accounts = int(events["account"].nunique()) if "account" in events.columns else 0
+    affected = len(flagged)
+    computers = int(events["computer"].nunique()) if "computer" in events.columns else 0
+    flagged_events = int(events["account"].astype(str).str.strip().isin(flagged).sum()) if "account" in events.columns else 0
+    rest_events = max(len(events) - flagged_events, 0)
+
+    cards = [
+        _card("Events analyzed", "db", "#13323a", "#8fdcff", f"{len(events):,}",
+              f"{computers} computers" if computers else "", "#0f3a44", "#8fdcff",
+              f"{flagged_events:,} events involve accounts named in findings",
+              _bar([(rest_events, "#8fdcff"), (flagged_events, "#b0245a")])),
+        _card("Review signals", "shield", "#3a1a2c", "#ff8fa8", f"{len(alerts):,}",
+              f"{rules} rule{'s' if rules != 1 else ''}", "#3a1a2c", "#ff8fa8",
+              f"{current} current • {hist} historical • Human triage required",
+              _bar([(current, "#8fdcff"), (hist, "#b0245a")])),
+        _card("Accounts in findings", "users", "#13323a", "#8fdcff", f"{affected:,}",
+              f"of {total_accounts} total" if total_accounts else "", "#0f3a44", "#8fdcff",
+              "Distinct accounts named in review signals",
+              _bar([(affected, "#8ff0b0"), (max(total_accounts - affected, 0), "transparent")])),
+        _card("High severity", "alert", "#3a1d1d", "#ff8f8f", f"{crit + high_only:,}",
+              f"{crit} Critical", "#3a1d1d", "#ff8f8f",
+              f"{high_only} High • {med} Medium • {low} Low • Needs analyst sign-off",
+              _bar([(crit, "#ff9a8b"), (high_only, "#b0245a"), (med, "#ffc857"), (low, "#53edc2")])),
+    ]
+    return '<div class="mgrid">' + "".join(cards) + "</div>"
+
+def repeat_accounts_html(items: list[dict[str, Any]]) -> str:
+    cards = []
+    for it in items:
+        sev = f'<span class="sev {_sev_class(it["max_severity"])}">{html_lib.escape(it["max_severity"])}</span>' if it["max_severity"] else ""
+        timeline = it["timeline"]
+        strip = "".join(
+            f'<span class="rdot {"f" if t["flagged"] else ""}" title="{html_lib.escape(str(t["filename"]))} · {html_lib.escape(str(t["analyzed_at"]))}"></span>'
+            for t in timeline)
+        rows = ""
+        for t in timeline[::-1][:5]:
+            tag = f'Flagged · {t["incidents"]} signal{"s" if t["incidents"] != 1 else ""}' if t["flagged"] else "Seen, not flagged"
+            rows += (f'<div class="rrow"><span class="rdot {"f" if t["flagged"] else ""}"></span>'
+                     f'<span class="rwhen">{html_lib.escape(str(t["analyzed_at"])[:16])}</span>'
+                     f'<span class="rfile" title="{html_lib.escape(str(t["filename"]))}">{html_lib.escape(str(t["filename"]))}</span>'
+                     f'<span class="rtag {"f" if t["flagged"] else ""}">{tag}</span></div>')
+        more = f'<div class="rmore">+{len(timeline) - 5} earlier log(s)</div>' if len(timeline) > 5 else ""
+        rules = "".join(f'<span class="uchip">{html_lib.escape(humanize_rule(r))}</span>' for r in it["rules"][:4])
+        hot = " hot" if it["flagged_logs"] >= 2 else ""
+        red = " red" if it["flagged_logs"] >= 2 else ""
+        cards.append(
+            f'<div class="racc{hot}"><div class="rhead"><span class="rname">{html_lib.escape(it["account"])}</span>{sev}</div>'
+            f'<div class="rbadges"><span class="rbadge{red}">Flagged in {it["flagged_logs"]} log{"s" if it["flagged_logs"] != 1 else ""}</span>'
+            f'<span class="rbadge">Seen in {it["logs_seen"]} logs</span><span class="rbadge">{it["incidents"]} signal{"s" if it["incidents"] != 1 else ""}</span></div>'
+            f'<div class="rstrip">{strip}</div><div style="margin:8px 0 4px 0">{rules}</div>{rows}{more}</div>')
+    return '<div class="rgrid">' + "".join(cards) + "</div>"
 
 # ----------------------------- Sidebar ---------------------------------------
 with st.sidebar:
@@ -194,8 +565,8 @@ with st.sidebar:
     st.caption("AUTHENTICATION MONITORING")
     st.markdown("---")
     nav_button("Dashboard", "▦")
-    nav_button("Analyze Logs", "▤")
     nav_button("Incident History", "◷")
+    nav_button("Repeat Accounts", "◎")
     nav_button("Settings", "⚙")
     st.markdown("---")
     st.markdown('<span class="pill">● Human review only</span>', unsafe_allow_html=True)
@@ -206,111 +577,143 @@ page = st.session_state.page
 # ----------------------------- Dashboard -------------------------------------
 if page == "Dashboard":
     st.markdown('<div class="hero"><div class="eyebrow">Authentication telemetry / Overview</div></div>', unsafe_allow_html=True)
-    title_col, status_col = st.columns([3, 1])
-    with title_col:
-        st.title("Security Overview")
-        st.caption("Authentication telemetry and incident review")
-    with status_col:
-        st.markdown('<div style="text-align:right;padding-top:14px"><span class="pill">● SYSTEM READY</span></div>', unsafe_allow_html=True)
-
+    st.title("Security Overview")
+    st.caption("Evidence-led authentication monitoring · human review only")
     events = st.session_state.current_events
     alerts = st.session_state.current_alerts
-    demo = events.empty
-    if demo:
-        st.info("Preview mode: upload a synthetic CSV in **Analyze Logs** to replace these illustrative empty-state metrics with real analysis results.")
-    high = 0
-    if not alerts.empty and "severity" in alerts.columns:
-        high = int(alerts["severity"].astype(str).str.lower().isin(["high", "critical"]).sum())
-    affected = safe_count(alerts, ["account", "accounts"])
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Events analyzed", f"{len(events):,}", help="Events in the most recent successful analysis.")
-    c2.metric("Incidents detected", f"{len(alerts):,}", help="Alerts produced by the configured rules.")
-    c3.metric("Accounts affected", f"{affected:,}", help="Unique accounts represented in the alerts.")
-    c4.metric("High severity", f"{high:,}", help="Alerts marked high or critical by the detector.")
+    evaluated = not events.empty and bool(st.session_state.current_filename)
 
-    left, right = st.columns([1.0, 1.25], gap="medium")
+    left, right = st.columns(2, gap="large")
     with left:
-        with st.container(border=True):
-            st.subheader("Login Event Distribution")
-            if not events.empty and "event" in events.columns:
-                dist = events["event"].astype(str).str.lower().value_counts().rename_axis("Event").reset_index(name="Count")
-                fig = px.pie(dist, names="Event", values="Count", hole=.68,
-                             color_discrete_sequence=["#53edc2", "#20cde5", "#ffc857", "#ff557b"])
-                fig.update_layout(
-                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    font_color="#dffbfc", margin=dict(l=5,r=5,t=10,b=5),
-                    legend=dict(orientation="h", yanchor="bottom", y=-.12, xanchor="center", x=.5),
-                    height=300,
-                )
-                st.plotly_chart(fig, use_container_width=True)
+        with st.container(border=True, height=560):
+            st.subheader("Incident Distribution")
+            st.caption("By detection rule · updates after evaluation")
+            if evaluated and not alerts.empty:
+                chart_data = normalized_alerts(alerts)
+                chart_data = chart_data[chart_data["Rule"].astype(str).str.strip().ne("")]
+                counts = chart_data["Rule"].value_counts().rename_axis("Detection rule").reset_index(name="Incidents")
+                if not counts.empty:
+                    components.html(donut_html(counts), height=395)
+                else:
+                    st.info("No incidents to chart for this evaluation.")
             else:
-                st.markdown("### <span style='color:#20e5ed'>◉</span> No event data yet", unsafe_allow_html=True)
-                st.caption("Your event distribution chart will appear here after analysis.")
+                st.markdown("<div style='height:300px;display:flex;align-items:center;justify-content:center'><div style='text-align:center'><div style='font-size:3.3rem;color:#1b747b'>◉</div><b style='color:#dffbfc'>AWAITING LOG DATA</b><p style='color:#8db4b9'>Upload and evaluate a CSV to populate this chart with real findings.</p></div></div>", unsafe_allow_html=True)
     with right:
-        with st.container(border=True):
-            st.subheader("Recent Security Activity")
-            if alerts.empty:
-                st.caption("No alerts yet. Analyze a synthetic CSV to populate this feed.")
+        with st.container(border=True, height=560):
+            st.subheader("Upload Log Files")
+            st.caption("CSV format · authorized or synthetic authentication logs")
+            uploaded = st.file_uploader("Choose a CSV file", type=["csv"], key="dashboard_csv_upload", help="Required columns: event_id, timestamp, account, computer, event.")
+            if uploaded is None:
+                st.markdown("<div style='border:1px dashed #1b747b;border-radius:12px;padding:14px 10px;text-align:center;background:#061b1f;margin:4px 0 8px 0'><div style='font-size:1.8rem;color:#20e5ed;line-height:1.2'>⇧</div><b style='color:#dffbfc'>No file uploaded yet</b><p style='color:#8db4b9;margin:2px 0 0 0'>Choose a CSV above to begin security analysis.</p></div>", unsafe_allow_html=True)
+                st.caption("Raw CSV rows are processed in memory and are not saved to the history database.")
             else:
-                nview = normalized_alerts(alerts).head(6)
+                st.markdown(f"**Selected:** `{uploaded.name}` · {uploaded.size:,} bytes")
+                if st.button("Evaluate Logs", type="primary", key="dashboard_run_analysis", use_container_width=True):
+                    run_analysis(uploaded)
+                    st.rerun()
+            st.markdown(upload_info_html(uploaded), unsafe_allow_html=True)
+
+    if evaluated:
+        st.markdown("")
+        st.markdown(metric_cards_html(events, alerts), unsafe_allow_html=True)
+        try:
+            _persist = persistent_accounts()
+        except Exception:
+            _persist = []
+        _cur = {str(a).strip().casefold() for a in events["account"].dropna().unique()} if "account" in events.columns else set()
+        _hits = [x for x in _persist if x["key"] in _cur]
+        if _hits:
+            st.markdown(f'<div class="alert-note">⚠ {len(_hits)} account(s) in this log were flagged in an earlier upload and keep reappearing across logs. Open <b>Repeat Accounts</b> in the sidebar to review them.</div>', unsafe_allow_html=True)
+        with st.container(border=True):
+            activity_title, activity_meta = st.columns([3, 1])
+            activity_title.subheader("Log Analysis Summary")
+            activity_title.caption(f"Evaluation complete · {st.session_state.current_filename}")
+            activity_meta.markdown(f'<div style="text-align:right;padding-top:8px"><span class="pill">{len(alerts):,} REVIEW SIGNALS</span></div>', unsafe_allow_html=True)
+            if alerts.empty:
+                st.success("No configured detection rules were triggered. This does not guarantee that all activity is safe.")
+            else:
+                nview = normalized_alerts(alerts).head(8)
                 for _, row in nview.iterrows():
                     severity = str(row["Severity"]).lower()
-                    color = "#ff557b" if severity in ("high", "critical") else "#ffc857" if severity == "medium" else "#20e5ed"
-                    st.markdown(
-                        f"""<div style="border:1px solid #12454b;border-left:3px solid {color};background:#061c20;border-radius:9px;padding:10px 12px;margin:7px 0">
-                        <span style="color:{color};font-weight:700">{row['Severity']}</span>
-                        &nbsp; <span style="color:#dffbfc">{row['Rule']}</span><br>
-                        <span style="color:#8db4b9;font-size:0.83rem">{row['Account']} · {row['Computer']} · {row['Start time']}</span>
-                        </div>""", unsafe_allow_html=True
-                    )
+                    color = "#ff4d4f" if severity in ("high", "critical", "critical review") else "#ff8c42" if severity == "medium" else "#ffd166"
+                    meta = " · ".join(x for x in [f"Account: {html_lib.escape(str(row['Account']))}" if row["Account"] else "", f"Computer: {html_lib.escape(str(row['Computer']))}" if row["Computer"] else ""] if x)
+                    meta_html = f"<br><span style='color:#8db4b9;font-size:.86rem'>{meta}</span>" if meta else ""
+                    ev_html = f"<br><span style='color:#8db4b9;font-size:.84rem'>{html_lib.escape(str(row['Evidence']))}</span>" if row["Evidence"] else ""
+                    sev_html = f"<span style='color:{color};font-weight:700'>{html_lib.escape(str(row['Severity']))}</span> &nbsp; " if row["Severity"] else ""
+                    card = f"<div style='border:1px solid #12454b;border-left:4px solid {color};background:#061c20;border-radius:9px;padding:12px 15px;margin:8px 0'>{sev_html}<span style='color:#dffbfc;font-weight:600'>{html_lib.escape(str(row['Rule']))}</span>{meta_html}{ev_html}</div>"
+                    st.markdown(card, unsafe_allow_html=True)
+                if len(alerts) > 8:
+                    st.caption(f"Showing 8 of {len(alerts):,} review signals. See Incidents for Review below for all details.")
+        with st.container(border=True):
+            st.subheader("Incidents for Review")
+            st.caption("Check the evidence and history context before drawing conclusions.")
+            show_incident_table(alerts, "dashboard")
+    else:
+        st.info("Upload a CSV and select **Evaluate Logs**. The detailed analysis will appear below these two panels after successful evaluation.")
 
-    st.markdown("")
-    with st.container(border=True):
-        title_col, button_col = st.columns([3, 1])
-        title_col.subheader("Incidents for Review")
-        title_col.caption("Review supporting evidence before drawing conclusions.")
-        if button_col.button("Analyze new logs →", use_container_width=True):
-            st.session_state.page = "Analyze Logs"
-            st.rerun()
-        show_incident_table(alerts, "dashboard")
-
-# ----------------------------- Analyze Logs ----------------------------------
+# ----------------------------- Analyze Logs (legacy state) -------------------
 elif page == "Analyze Logs":
-    st.title("Analyze Logs")
-    st.caption("Upload a synthetic authentication CSV, validate it, and run the detection rules.")
-    with st.container(border=True):
-        uploaded = st.file_uploader("Choose a CSV file", type=["csv"], help="Expected columns include event_id, timestamp, account, computer, and event.")
-        st.caption("Use synthetic or authorized logs only. CSV validity does not prove authenticity or completeness.")
-        if uploaded is not None:
-            st.write(f"Selected file: **{uploaded.name}** · {uploaded.size:,} bytes")
-            if st.button("Run Security Analysis", type="primary", use_container_width=True):
-                run_analysis(uploaded)
-    if not st.session_state.current_alerts.empty or not st.session_state.current_events.empty:
-        st.markdown("### Latest analysis")
-        a, b, c = st.columns(3)
-        a.metric("Events analyzed", f"{len(st.session_state.current_events):,}")
-        b.metric("Alerts detected", f"{len(st.session_state.current_alerts):,}")
-        c.metric("Source file", st.session_state.current_filename or "—")
-        show_incident_table(st.session_state.current_alerts, "analysis")
+    # Backward compatibility for a session that retained the old page selection.
+    st.session_state.page = "Dashboard"
+    st.session_state.show_upload = True
+    st.rerun()
 
 # ----------------------------- History ---------------------------------------
 elif page == "Incident History":
     st.title("Incident History")
-    st.caption("Previous analyses in this active session. History resets when the app session is cleared.")
-    if not st.session_state.analyses:
-        st.info("No analysis history yet. Upload a CSV in Analyze Logs to begin.")
+    st.caption("Persistent SQLite history across app restarts. Only analysis metadata and incident records are stored; raw uploaded CSVs are not saved.")
+    history_rows = list_analyses(limit=100)
+    if not history_rows:
+        st.info("No saved analyses yet. Upload and evaluate a CSV from the Dashboard.")
     else:
         hist = pd.DataFrame([{
-            "Analyzed at": item["analyzed_at"],
-            "Source file": item["filename"],
-            "Events": item["events"],
-            "Alerts": item["alerts"],
-        } for item in st.session_state.analyses])
+            "Analysis ID": item["id"], "Analyzed at": item["analyzed_at"],
+            "Source file": item["filename"], "Events": item["event_count"], "Review signals": item["alert_count"],
+        } for item in history_rows])
         st.dataframe(hist, use_container_width=True, hide_index=True)
-        choices = [f"{item['analyzed_at']} — {item['filename']}" for item in st.session_state.analyses]
-        selected = st.selectbox("View an analysis", choices)
-        idx = choices.index(selected)
-        show_incident_table(st.session_state.analyses[idx]["data"], "history")
+        options = {f"#{item['id']} · {item['analyzed_at']} — {item['filename']}": item["id"] for item in history_rows}
+        selected = st.selectbox("View a saved analysis", list(options.keys()))
+        show_incident_table(get_analysis_incidents(options[selected]), "history")
+
+# ----------------------------- Repeat accounts -------------------------------
+elif page == "Repeat Accounts":
+    st.title("Repeat Accounts")
+    st.caption("Accounts flagged in a previously uploaded log that keep appearing in other logs · review prompts, not proof of intrusion")
+    items = persistent_accounts()
+    logs_tracked = len(list_analyses(limit=1000))
+    if not items:
+        st.info("No persistent accounts yet. An account shows up here once it was flagged in one uploaded log and also appears in at least one other log.")
+        st.caption(f"{logs_tracked} log(s) tracked so far.")
+    else:
+        multi = sum(1 for x in items if x["flagged_logs"] >= 2)
+        st.markdown('<div class="mgrid">' + "".join([
+            _card("Persistent accounts", "users", "#13323a", "#8fdcff", f"{len(items):,}", "", "#0f3a44", "#8fdcff",
+                  "Flagged in an earlier log and present in other uploads",
+                  _bar([(multi, "#ff9a8b"), (len(items) - multi, "#8fdcff")])),
+            _card("Flagged in 2+ logs", "alert", "#3a1d1d", "#ff8f8f", f"{multi:,}", "Recurring", "#3a1d1d", "#ff8f8f",
+                  "Accounts with real findings in more than one upload",
+                  _bar([(multi, "#ff9a8b"), (max(len(items) - multi, 0), "transparent")])),
+            _card("Logs tracked", "db", "#13323a", "#8fdcff", f"{logs_tracked:,}", "", "#0f3a44", "#8fdcff",
+                  "Distinct uploads in the history database", _bar([(1, "#8fdcff")])),
+        ]) + "</div>", unsafe_allow_html=True)
+        f1, f2 = st.columns([3, 2])
+        query = f1.text_input("Search accounts", key="repeat_q", placeholder="🔍  Search account or rule", label_visibility="collapsed")
+        only_multi = f2.checkbox("Only accounts flagged in 2+ logs", key="repeat_multi")
+        shown = [x for x in items if (not only_multi or x["flagged_logs"] >= 2)
+                 and (not query.strip() or query.strip().lower() in (x["account"] + " " + " ".join(x["rules"])).lower())]
+        st.caption(f"Showing {len(shown):,} of {len(items):,} persistent account(s) · red dots = log where the account was flagged, blue = seen without findings")
+        if shown:
+            st.markdown(repeat_accounts_html(shown), unsafe_allow_html=True)
+            export = pd.DataFrame([{
+                "Account": x["account"], "Logs seen": x["logs_seen"], "Logs flagged": x["flagged_logs"],
+                "Signals": x["incidents"], "Highest severity": x["max_severity"],
+                "Rules": "; ".join(humanize_rule(r) for r in x["rules"]), "First seen": x["first_seen"], "Last seen": x["last_seen"],
+            } for x in shown])
+            st.download_button("⬇ Download repeat accounts CSV", data=export.to_csv(index=False).encode("utf-8"),
+                               file_name="logshield_repeat_accounts.csv", mime="text/csv", key="repeat_download")
+        else:
+            st.info("No accounts match these filters.")
+    st.caption("For this view LogShield stores account IDs and per-log event counts only. Logs analysed before this feature count where the account was flagged.")
 
 # ----------------------------- Settings --------------------------------------
 elif page == "Settings":
