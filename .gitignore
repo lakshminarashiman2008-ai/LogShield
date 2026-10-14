@@ -1,0 +1,3 @@
+*.db
+   lab_holidays.json
+   .streamlit/secrets.toml
