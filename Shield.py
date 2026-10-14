@@ -19,6 +19,10 @@ try:
     from detector import DEFAULT_SETTINGS
 except ImportError:
     DEFAULT_SETTINGS = {}
+try:
+    from detector import validate_settings
+except ImportError:
+    validate_settings = None
 
 st.set_page_config(
     page_title="LogShield | Security Overview",
@@ -74,6 +78,59 @@ st.markdown(
     [data-testid="stFileUploaderDropzone"] button { padding: 4px 12px !important; min-height: 32px !important; }
     [data-testid="stFileUploaderFile"] { padding: 2px 0 !important; }
     hr { border-color:#123e44; }
+    /* Hide the anchor/link icon Streamlit adds beside every heading */
+    [data-testid="stHeaderActionElements"], [data-testid="stHeadingActionElements"], .stHeading a, h1 a, h2 a, h3 a { display:none !important; }
+
+    /* Motion */
+    @keyframes fadeUp { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:none; } }
+    @keyframes slideIn { from { opacity:0; transform:translateX(-14px); } to { opacity:1; transform:none; } }
+    @keyframes rowIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+    @keyframes pulse { 0% { box-shadow:0 0 0 0 rgba(83,237,194,.55); } 70% { box-shadow:0 0 0 8px rgba(83,237,194,0); } 100% { box-shadow:0 0 0 0 rgba(83,237,194,0); } }
+    .block-container { animation:fadeUp .5s ease backwards; }
+    div[data-testid="stVerticalBlockBorderWrapper"] { animation:fadeUp .55s ease backwards; }
+    .alert-note, .uchip, .sigcard { animation:fadeUp .45s ease backwards; }
+    .mcard, .racc { animation:fadeUp .6s ease backwards; transition:transform .25s ease, border-color .25s ease, box-shadow .25s ease; }
+    .mcard:hover, .racc:hover { transform:translateY(-4px); border-color:#1b747b; box-shadow:0 12px 28px rgba(0,0,0,.35), 0 0 0 1px rgba(32,229,237,.12); }
+    .mcard:nth-child(2), .racc:nth-child(2) { animation-delay:.08s; } .mcard:nth-child(3), .racc:nth-child(3) { animation-delay:.16s; }
+    .mcard:nth-child(4), .racc:nth-child(4) { animation-delay:.24s; } .racc:nth-child(5) { animation-delay:.32s; } .racc:nth-child(6) { animation-delay:.4s; }
+    .ltable tbody tr { animation:rowIn .4s ease backwards; }
+    .ltable tbody tr:nth-child(1){animation-delay:.03s} .ltable tbody tr:nth-child(2){animation-delay:.06s} .ltable tbody tr:nth-child(3){animation-delay:.09s}
+    .ltable tbody tr:nth-child(4){animation-delay:.12s} .ltable tbody tr:nth-child(5){animation-delay:.15s} .ltable tbody tr:nth-child(6){animation-delay:.18s}
+    .ltable tbody tr:nth-child(7){animation-delay:.21s} .ltable tbody tr:nth-child(8){animation-delay:.24s} .ltable tbody tr:nth-child(9){animation-delay:.27s}
+    .ltable tbody tr:nth-child(10){animation-delay:.3s}
+    div.stButton > button, [data-testid="stFormSubmitButton"] button { transition:transform .2s ease, box-shadow .2s ease, border-color .2s ease; }
+    div.stButton > button:hover, [data-testid="stFormSubmitButton"] button:hover { transform:translateY(-2px); box-shadow:0 8px 20px rgba(32,229,237,.18); }
+    .pulse { display:inline-block; width:8px; height:8px; border-radius:50%; background:#53edc2; animation:pulse 2s infinite; }
+
+    /* Sidebar */
+    [data-testid="stSidebar"] > div:first-child { background:linear-gradient(180deg,#05232b 0%,#031a1e 60%,#021215 100%); }
+    .sb-brand { display:flex; align-items:center; gap:12px; padding:6px 2px 4px 2px; animation:slideIn .5s ease backwards; }
+    .sb-logo { width:42px; height:42px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:1.4rem; color:#031316; background:linear-gradient(135deg,#20e5ed,#53edc2); box-shadow:0 6px 18px rgba(32,229,237,.3); }
+    .sb-name { font-family:'Space Grotesk',sans-serif; font-size:1.35rem; font-weight:700; color:#eaffff; line-height:1.1; }
+    .sb-name span { color:var(--cyan); }
+    .sb-sub { font-family:'JetBrains Mono',monospace; font-size:.6rem; letter-spacing:.16em; color:#6f9ea4; text-transform:uppercase; margin-top:3px; }
+    .sb-label { font-family:'JetBrains Mono',monospace; font-size:.62rem; letter-spacing:.18em; color:#5d8a90; text-transform:uppercase; margin:22px 0 8px 6px; }
+    [data-testid="stSidebar"] div.stButton > button { width:100%; justify-content:flex-start; text-align:left; background:transparent; border:1px solid transparent; color:#9cc8cc; padding:.72rem 1rem; border-radius:12px; font-weight:500; box-shadow:none; animation:slideIn .5s ease backwards; transition:all .25s ease; }
+    [data-testid="stSidebar"] div.stButton > button p { color:inherit; text-align:left; width:100%; }
+    [data-testid="stSidebar"] div.stButton > button:hover { background:#082a30; color:#e7fbfc; border-color:#12454b; transform:translateX(5px); box-shadow:none; }
+    [data-testid="stSidebar"] div.stButton > button[kind="primary"], [data-testid="stSidebar"] div.stButton > button[data-testid="stBaseButton-primary"] { background:linear-gradient(90deg,rgba(32,229,237,.18),rgba(32,229,237,.03)); color:#eaffff; border-color:#14525a; box-shadow:inset 3px 0 0 #20e5ed; }
+    .st-key-nav_Dashboard button { animation-delay:.05s !important; } .st-key-nav_Incident_History button { animation-delay:.12s !important; }
+    .st-key-nav_Repeat_Accounts button { animation-delay:.19s !important; } .st-key-nav_Settings button { animation-delay:.26s !important; }
+    .sb-card { background:#061f24; border:1px solid #11464d; border-radius:14px; padding:14px; margin-top:26px; animation:fadeUp .6s .3s ease backwards; }
+    .sb-status { display:flex; align-items:center; gap:9px; color:#cdeff5; font-size:.85rem; font-weight:600; }
+    .sb-stats { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:12px; }
+    .sb-stats div { background:#04181c; border:1px solid #0f3a40; border-radius:10px; padding:8px 10px; }
+    .sb-stats b { display:block; font-family:'Space Grotesk',sans-serif; font-size:1.2rem; color:#e7fbfc; line-height:1.1; }
+    .sb-stats span { font-family:'JetBrains Mono',monospace; font-size:.58rem; letter-spacing:.12em; color:#6f9ea4; text-transform:uppercase; }
+    .sb-note { color:#6f9ea4; font-size:.78rem; line-height:1.45; margin:12px 2px 10px 2px; }
+
+    /* Settings */
+    [data-testid="stForm"] { border:none !important; padding:0 !important; background:transparent !important; }
+    .sgh { display:flex; align-items:center; gap:14px; margin-bottom:10px; }
+    .sgt { font-family:'Space Grotesk',sans-serif; font-size:1.1rem; font-weight:600; color:#e7fbfc; }
+    .sgd { color:#8db4b9; font-size:.86rem; margin-top:2px; }
+    [data-testid="stNumberInput"] label p, [data-testid="stTextInput"] label p, [data-testid="stToggle"] label p { color:#bfe6ea !important; font-size:.84rem; }
+
     /* Metric cards */
     .mgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; margin:10px 0 14px 0; }
     .mcard { background:linear-gradient(160deg,#0c2a30,#071d21); border:1px solid #123e44; border-radius:18px; padding:20px 22px 22px 22px; }
@@ -157,8 +214,10 @@ initialize_db()
 
 # ----------------------------- Helpers ---------------------------------------
 def nav_button(label: str, icon: str) -> None:
-    if st.sidebar.button(f"{icon}  {label}", key=f"nav_{label}", use_container_width=True):
+    active = st.session_state.page == label
+    if st.sidebar.button(f"{icon}  {label}", key=f"nav_{label}", use_container_width=True, type="primary" if active else "secondary"):
         st.session_state.page = label
+        st.rerun()
 
 def first_existing(frame: pd.DataFrame, names: list[str], default: Any = None):
     for name in names:
@@ -473,6 +532,13 @@ ICONS = {
     "alert": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v9M12 19v.01"/></svg>',
 }
 
+ICONS.update({
+    "clock": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+    "layers": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg>',
+    "net": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7.5l3 8M16 7.5l-3 8M8.5 6h7"/></svg>',
+    "sliders": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h8M18 6h2M4 12h2M12 12h8M4 18h10M20 18h0"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>',
+})
+
 def _bar(segments: list[tuple[float, str]]) -> str:
     parts = "".join(f'<span style="flex:{c};background:{col}"></span>' for c, col in segments if c > 0)
     return f'<div class="mbar">{parts}</div>'
@@ -561,16 +627,21 @@ def repeat_accounts_html(items: list[dict[str, Any]]) -> str:
 
 # ----------------------------- Sidebar ---------------------------------------
 with st.sidebar:
-    st.markdown('<div class="sidebar-brand">◈ Log<span>Shield</span></div>', unsafe_allow_html=True)
-    st.caption("AUTHENTICATION MONITORING")
-    st.markdown("---")
+    st.markdown('<div class="sb-brand"><div class="sb-logo">◈</div><div><div class="sb-name">Log<span>Shield</span></div><div class="sb-sub">Authentication monitoring</div></div></div><div class="sb-label">Navigate</div>', unsafe_allow_html=True)
     nav_button("Dashboard", "▦")
     nav_button("Incident History", "◷")
     nav_button("Repeat Accounts", "◎")
     nav_button("Settings", "⚙")
-    st.markdown("---")
-    st.markdown('<span class="pill">● Human review only</span>', unsafe_allow_html=True)
-    st.caption("Suspicious patterns are signals for review, not proof of intrusion.")
+    try:
+        _logs_n = len(list_analyses(limit=1000))
+        _repeat_n = len(persistent_accounts())
+    except Exception:
+        _logs_n, _repeat_n = 0, 0
+    st.markdown(
+        f'<div class="sb-card"><div class="sb-status"><span class="pulse"></span>Monitoring ready</div>'
+        f'<div class="sb-stats"><div><b>{_logs_n}</b><span>Logs</span></div><div><b>{_repeat_n}</b><span>Repeat accts</span></div></div></div>'
+        '<div class="sb-note">Suspicious patterns are signals for review, not proof of intrusion.</div>'
+        '<span class="pill">● Human review only</span>', unsafe_allow_html=True)
 
 page = st.session_state.page
 
@@ -640,7 +711,7 @@ if page == "Dashboard":
                     meta_html = f"<br><span style='color:#8db4b9;font-size:.86rem'>{meta}</span>" if meta else ""
                     ev_html = f"<br><span style='color:#8db4b9;font-size:.84rem'>{html_lib.escape(str(row['Evidence']))}</span>" if row["Evidence"] else ""
                     sev_html = f"<span style='color:{color};font-weight:700'>{html_lib.escape(str(row['Severity']))}</span> &nbsp; " if row["Severity"] else ""
-                    card = f"<div style='border:1px solid #12454b;border-left:4px solid {color};background:#061c20;border-radius:9px;padding:12px 15px;margin:8px 0'>{sev_html}<span style='color:#dffbfc;font-weight:600'>{html_lib.escape(str(row['Rule']))}</span>{meta_html}{ev_html}</div>"
+                    card = f"<div class='sigcard' style='border:1px solid #12454b;border-left:4px solid {color};background:#061c20;border-radius:9px;padding:12px 15px;margin:8px 0'>{sev_html}<span style='color:#dffbfc;font-weight:600'>{html_lib.escape(str(row['Rule']))}</span>{meta_html}{ev_html}</div>"
                     st.markdown(card, unsafe_allow_html=True)
                 if len(alerts) > 8:
                     st.caption(f"Showing 8 of {len(alerts):,} review signals. See Incidents for Review below for all details.")
@@ -717,32 +788,143 @@ elif page == "Repeat Accounts":
 
 # ----------------------------- Settings --------------------------------------
 elif page == "Settings":
+    st.markdown('<div class="hero"><div class="eyebrow">Detector configuration / Settings</div></div>', unsafe_allow_html=True)
     st.title("Detection Settings")
-    st.caption("Adjust available detector settings. Changes apply to future analyses in this session.")
+    st.caption("Tune how strictly each rule fires · changes apply to future analyses in this session")
     current = st.session_state.settings
+    if st.session_state.pop("settings_saved", False):
+        st.success("Settings saved for this session. Run a new analysis to apply them.")
     if not current:
         st.warning("No DEFAULT_SETTINGS dictionary was exported by detector.py. The detector's current defaults remain active.")
         st.code("DEFAULT_SETTINGS = {...}", language="python")
         st.caption("Expose the detector's supported settings before adding controls here; avoid inventing setting keys.")
     else:
+        ver = st.session_state.get("settings_ver", 0)
+        SETTING_LABELS = {
+            "failure_success_threshold": ("Failures before success", "Minimum failed logins before a following success is flagged."),
+            "failure_success_window_minutes": ("Window (minutes)", "How close the failures and the success must be."),
+            "lab_opening_hour": ("Opens · hour", "0–23"), "lab_opening_minute": ("Opens · minute", "0–59"),
+            "lab_closing_hour": ("Closes · hour", "0–23"), "lab_closing_minute": ("Closes · minute", "0–59"),
+            "consecutive_medium_threshold": ("Medium at", "Consecutive failures that raise a Medium signal."),
+            "consecutive_high_threshold": ("High at", "Must be higher than the Medium value."),
+            "consecutive_critical_threshold": ("Critical review at", "Must be higher than the High value."),
+            "cross_account_window_minutes": ("Window (minutes)", "Time window for the burst."),
+            "cross_account_min_accounts": ("Min. accounts", "Distinct accounts failing (at least 2)."),
+            "cross_account_min_failures": ("Min. failures", "Total failures inside the window."),
+            "cross_machine_window_minutes": ("Window (minutes)", "Time window for the burst."),
+            "cross_machine_min_computers": ("Min. computers", "Distinct computers involved (at least 2)."),
+            "cross_machine_min_failures": ("Min. failures", "Total failures inside the window."),
+            "deduplicate_overlapping_alerts": ("Merge overlapping alerts", "Combine alerts that share the same event evidence into one incident."),
+        }
+        SETTING_GROUPS = [
+            ("Success after repeated failures", "shield", "Flags a successful login that follows several failures on the same account and computer.", ["failure_success_threshold", "failure_success_window_minutes"]),
+            ("Lab hours", "clock", "Successful logins outside this window are flagged. Opening is inclusive, closing is exclusive.", ["lab_opening_hour", "lab_opening_minute", "lab_closing_hour", "lab_closing_minute"]),
+            ("Consecutive failed logins", "layers", "Severity steps for a failure streak with no success in between.", ["consecutive_medium_threshold", "consecutive_high_threshold", "consecutive_critical_threshold"]),
+            ("Failures across multiple accounts", "users", "Many accounts failing on one computer within a short window.", ["cross_account_window_minutes", "cross_account_min_accounts", "cross_account_min_failures"]),
+            ("One account across multiple computers", "net", "One account failing on several computers within a short window.", ["cross_machine_window_minutes", "cross_machine_min_computers", "cross_machine_min_failures"]),
+        ]
+
+        # Summary cards (read from the saved settings)
+        def _i(key, default=0):
+            try:
+                return int(current.get(key, default))
+            except (TypeError, ValueError):
+                return default
+        oh, om, ch, cm = _i("lab_opening_hour", 8), _i("lab_opening_minute"), _i("lab_closing_hour", 18), _i("lab_closing_minute")
+        open_hours = max(((ch * 60 + cm) - (oh * 60 + om)) / 60, 0)
+        med_t, high_t, crit_t = _i("consecutive_medium_threshold", 5), _i("consecutive_high_threshold", 8), _i("consecutive_critical_threshold", 10)
+        windows = current.get("rolling_windows") if isinstance(current.get("rolling_windows"), list) else []
+        st.markdown('<div class="mgrid">' + "".join([
+            _card("Lab hours", "clock", "#13323a", "#8fdcff", f"{oh:02d}:{om:02d}", f"closes {ch:02d}:{cm:02d}", "#0f3a44", "#8fdcff",
+                  f"{open_hours:g} open hours per day · logins outside are flagged", _bar([(open_hours, "#8fdcff"), (max(24 - open_hours, 0), "transparent")])),
+            _card("Streak severity", "layers", "#3a1d1d", "#ff8f8f", f"{med_t}/{high_t}/{crit_t}", "Med/High/Crit", "#3a1d1d", "#ff8f8f",
+                  "Consecutive failures needed for each severity level",
+                  _bar([(med_t, "#ffc857"), (max(high_t - med_t, 0), "#b0245a"), (max(crit_t - high_t, 0), "#ff9a8b")])),
+            _card("Rolling windows", "sliders", "#13323a", "#8ff0b0", f"{len(windows)}", "active", "#0c2e2a", "#53edc2",
+                  " · ".join(str(w.get("label", "")) for w in windows) or "No rolling windows configured",
+                  _bar([(1, "#8ff0b0")] * max(len(windows), 1))),
+        ]) + "</div>", unsafe_allow_html=True)
+
+        def setting_input(container, key):
+            value = current[key]
+            label, helptext = SETTING_LABELS.get(key, (key.replace("_", " ").title(), None))
+            wkey = f"set_{ver}_{key}"
+            if isinstance(value, bool):
+                return container.toggle(label, value=value, key=wkey, help=helptext)
+            if isinstance(value, int):
+                top = 23 if key.endswith("_hour") else 59 if key.endswith("_minute") else None
+                return container.number_input(label, value=value, step=1, min_value=0, max_value=top, key=wkey, help=helptext)
+            if isinstance(value, float):
+                return container.number_input(label, value=value, key=wkey, help=helptext)
+            if isinstance(value, str):
+                return container.text_input(label, value=value, key=wkey, help=helptext)
+            container.caption(f"{label}: {value} (not editable here)")
+            return value
+
+        def group_header(title, icon, desc):
+            st.markdown(f'<div class="sgh"><span class="micon" style="background:#13323a;color:#8fdcff">{ICONS[icon]}</span><div><div class="sgt">{title}</div><div class="sgd">{desc}</div></div></div>', unsafe_allow_html=True)
+
         with st.form("settings_form"):
             updated = {}
-            for key, value in current.items():
-                label = key.replace("_", " ").title()
-                if isinstance(value, bool):
-                    updated[key] = st.checkbox(label, value=value)
-                elif isinstance(value, int):
-                    updated[key] = st.number_input(label, value=value, step=1)
-                elif isinstance(value, float):
-                    updated[key] = st.number_input(label, value=value)
-                elif isinstance(value, str):
-                    updated[key] = st.text_input(label, value=value)
-                else:
-                    st.caption(f"{label}: {value} (not editable in this form)")
-                    updated[key] = value
-            saved = st.form_submit_button("Save settings", use_container_width=True)
-            if saved:
-                st.session_state.settings = updated
-                st.success("Settings saved for this session. Run a new analysis to apply them.")
-    st.markdown("---")
+            grouped = {k for g in SETTING_GROUPS for k in g[3]}
+            for title, icon, desc, keys in SETTING_GROUPS:
+                keys = [k for k in keys if k in current]
+                if not keys:
+                    continue
+                with st.container(border=True):
+                    group_header(title, icon, desc)
+                    cols = st.columns(len(keys))
+                    for col, key in zip(cols, keys):
+                        updated[key] = setting_input(col, key)
+
+            edited_windows = None
+            if windows or isinstance(current.get("rolling_windows"), list):
+                with st.container(border=True):
+                    group_header("Rolling failure windows", "sliders", "Raise a signal when one account and computer exceed a failure count inside a time window. Add or remove rows as needed.")
+                    frame = pd.DataFrame(windows, columns=["label", "minutes", "threshold"]) if windows else pd.DataFrame(columns=["label", "minutes", "threshold"])
+                    edited_windows = st.data_editor(
+                        frame, num_rows="dynamic", use_container_width=True, hide_index=True, key=f"set_{ver}_rolling",
+                        column_config={
+                            "label": st.column_config.TextColumn("Label"),
+                            "minutes": st.column_config.NumberColumn("Window (minutes)", min_value=1, step=1),
+                            "threshold": st.column_config.NumberColumn("Failure threshold", min_value=1, step=1),
+                        })
+
+            other = [k for k in current if k not in grouped and k != "rolling_windows"]
+            if other:
+                with st.container(border=True):
+                    group_header("Alert handling" if "deduplicate_overlapping_alerts" in other else "Other settings", "sliders", "General behaviour of the detector.")
+                    cols = st.columns(min(len(other), 3))
+                    for i, key in enumerate(other):
+                        updated[key] = setting_input(cols[i % len(cols)], key)
+
+            b1, b2, _sp = st.columns([1, 1, 2])
+            save = b1.form_submit_button("Save settings", type="primary", use_container_width=True)
+            reset = b2.form_submit_button("Reset to defaults", use_container_width=True)
+
+        if reset:
+            st.session_state.settings = dict(DEFAULT_SETTINGS)
+            st.session_state.settings_ver = ver + 1
+            st.session_state.settings_saved = True
+            st.rerun()
+        if save:
+            candidate = dict(current)
+            candidate.update(updated)
+            if edited_windows is not None:
+                rows = []
+                for r in edited_windows.to_dict("records"):
+                    if pd.isna(r.get("minutes")) or pd.isna(r.get("threshold")):
+                        continue
+                    label = str(r.get("label") or "").strip() or f"{int(r['minutes'])} minutes"
+                    rows.append({"label": label, "minutes": int(r["minutes"]), "threshold": int(r["threshold"])})
+                candidate["rolling_windows"] = rows
+            try:
+                if validate_settings is not None:
+                    candidate = validate_settings(candidate)
+            except (ValueError, KeyError, TypeError) as exc:
+                st.error(f"These settings were not saved: {exc}")
+            else:
+                st.session_state.settings = candidate
+                st.session_state.settings_saved = True
+                st.rerun()
     st.markdown('<div class="alert-note">LogShield supports analyst review only. It does not block accounts or prove malicious intent.</div>', unsafe_allow_html=True)
